@@ -21,8 +21,7 @@ import os
 from step0_tda_gate import ensure_wordnet, collect_subtree
 from step2_cost import build_h_ic
 from step3_asymmetry import build_pairs, lemma_freq, spearman, partial_spearman
-
-CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "step3b_cache.json")
+from step3b_azure_confirm import collect_frontier
 
 
 def main():
@@ -31,14 +30,13 @@ def main():
     h_ic, _ = build_h_ic(root, nodes, parents)
     isa, cousins, words = build_pairs(nodes, parents)
 
-    if not os.path.exists(CACHE):
-        print("НЕТ кэша step3b_cache.json — сначала прогони step3b на VPS."); return
-    cache = json.load(open(CACHE))
+    print("[azure] LIVE-опрос фронтира (без кэша)...", file=sys.stderr)
+    fr = collect_frontier(cousins, words)
 
     rows = []
     for a, b in cousins:
         wa, wb = words[a], words[b]
-        r = cache.get(f"{wa}|{wb}")
+        r = fr.get(f"{wa}|{wb}")
         if not r:
             continue
         ab, ba = float(r.get("a_is_b", 0)), float(r.get("b_is_a", 0))

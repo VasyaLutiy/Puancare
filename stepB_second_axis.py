@@ -27,8 +27,7 @@ from nltk.corpus import wordnet as wn
 from step0_tda_gate import ensure_wordnet, collect_subtree
 from step2_cost import build_h_ic, resolve
 from step3_asymmetry import build_pairs, lemma_freq, spearman, partial_spearman
-
-CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "step3b_cache.json")
+from step3b_azure_confirm import collect_frontier
 
 STOP = set("a an the of to in on and or with is are was were be been being for "
            "as by at from that this these those it its their his her any some "
@@ -56,9 +55,8 @@ def main():
     h_ic, _ = build_h_ic(root, nodes, parents)
     isa, cousins, words = build_pairs(nodes, parents)
 
-    cache = json.load(open(CACHE)) if os.path.exists(CACHE) else {}
-    if not cache:
-        print("НЕТ кэша step3b_cache.json — прогони step3b на VPS."); return
+    print("[azure] LIVE-опрос фронтира (без кэша)...", file=sys.stderr)
+    cache = collect_frontier(cousins, words)
 
     rows = []
     for a, b in cousins:
@@ -104,14 +102,20 @@ def main():
     # классика
     classics = [("whale", "fish"), ("dolphin", "fish"), ("penguin", "bird"),
                 ("bat", "bird"), ("seal", "fish"), ("shark", "whale")]
-    print("  Классика: gloss_sim и combined (sanity):")
+    print("  Классика: gloss_sim и combined (sanity, live):")
     print(f"    {'A':9s} {'B':9s} {'asym':>6s} {'h_ic-d':>7s} {'gloss':>6s} {'comb':>7s}")
+    from step3b_azure_confirm import query_one
+    from utils_azure import AzureJSON
+    az = AzureJSON()
     for wa, wb in classics:
         a, b = resolve(wa, nodes), resolve(wb, nodes)
         if not (a and b):
             continue
-        r = cache.get(f"{wa}|{wb}")
-        asym = (float(r["a_is_b"]) - float(r["b_is_a"])) if r else float("nan")
+        try:
+            r = query_one(az, wa, wb)
+            asym = float(r["a_is_b"]) - float(r["b_is_a"])
+        except Exception:
+            asym = float("nan")
         hd = h_ic[a] - h_ic[b]; gs = gloss_sim(a, b)
         print(f"    {wa:9s} {wb:9s} {asym:6.0f} {hd:+7.2f} {gs:6.2f} {hd*gs:+7.2f}")
     print("=" * 72)

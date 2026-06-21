@@ -71,14 +71,18 @@ def build_pairs(nodes, parents, n_isa=120, n_cousin=120):
     rng = random.Random(SEED)
     desc, children = descendants_map(nodes, parents)
     words = {n: good_word(n) for n in nodes}
-    usable = [n for n in nodes if words[n]]
+    # ДЕТЕРМИНИЗМ: nodes — set, порядок итерации плавает между процессами.
+    # Сортируем по имени синсета => RNG воспроизводим, пары стабильны (пред-регистрация).
+    def srt(seq):
+        return sorted(seq, key=lambda s: s.name())
+    usable = srt(n for n in nodes if words[n])
 
     isa = []
     tries = 0
     while len(isa) < n_isa and tries < n_isa * 60:
         tries += 1
         s = rng.choice(usable)
-        anc = [a for a in ancestors(s, parents) if a != s and words[a]]
+        anc = srt(a for a in ancestors(s, parents) if a != s and words[a])
         if not anc:
             continue
         g = rng.choice(anc)
@@ -91,14 +95,14 @@ def build_pairs(nodes, parents, n_isa=120, n_cousin=120):
     while len(cousins) < n_cousin and tries < n_cousin * 80:
         tries += 1
         x = rng.choice(usable)
-        anc_x = [a for a in ancestors(x, parents) if a != x]
+        anc_x = srt(a for a in ancestors(x, parents) if a != x)
         if not anc_x:
             continue
         c = rng.choice(anc_x)                       # общий предок
-        cand = [d for d in desc[c] if d in usable_set
-                and d not in ancestors(x, parents)
-                and x not in ancestors(d, parents)
-                and words[d] != words[x]]
+        cand = srt(d for d in desc[c] if d in usable_set
+                   and d not in ancestors(x, parents)
+                   and x not in ancestors(d, parents)
+                   and words[d] != words[x])
         if not cand:
             continue
         y = rng.choice(cand)                        # кузен x: общий предок c, не is-a

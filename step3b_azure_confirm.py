@@ -26,8 +26,6 @@ from step2_cost import build_h_ic
 from step3_asymmetry import build_pairs, lemma_freq, spearman, partial_spearman
 from utils_azure import AzureJSON
 
-CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "step3b_cache.json")
-
 SYSTEM = (
     "Ты модель когнитивной правдоподобности КАТЕГОРИАЛЬНЫХ ОШИБОК (json). "
     "Для пары существительных оцени не логическую истинность, а насколько "
@@ -40,28 +38,41 @@ SYSTEM = (
 SCHEMA = {"a_is_b": "0..100", "b_is_a": "0..100", "shared": "общее свойство кратко"}
 
 
-def load_cache():
-    if os.path.exists(CACHE):
-        with open(CACHE) as f:
-            return json.load(f)
-    return {}
-
-
-def save_cache(c):
-    with open(CACHE, "w") as f:
-        json.dump(c, f, ensure_ascii=False, indent=1)
-
-
-def query_pair(az, wa, wb, cache):
-    key = f"{wa}|{wb}"
-    if key in cache:
-        return cache[key]
+def query_one(az, wa, wb):
     user = (f"A = {wa}, B = {wb}. "
             f"Оцени правдоподобность интуитивной ошибки: "
             f"(1) 'a {wa} is a kind of {wb}'; (2) 'a {wb} is a kind of {wa}'.")
-    out = az.ask(system=SYSTEM, user=user, schema=SCHEMA)
-    cache[key] = out
-    return out
+    return az.ask(system=SYSTEM, user=user, schema=SCHEMA)
+
+
+def collect_frontier(cousins, words, az=None, workers=8, progress=True):
+    """LIVE-опрос фронтира (без кэша). Возвращает dict 'wa|wb' -> {a_is_b,b_is_a,shared}."""
+    if az is None:
+        az = AzureJSON()
+    results = {}
+
+    def work(pair):
+        a, b = pair
+        wa, wb = words[a], words[b]
+        try:
+            r = query_one(az, wa, wb)
+            return wa, wb, dict(a_is_b=float(r.get("a_is_b", 0)),
+                                b_is_a=float(r.get("b_is_a", 0)),
+                                shared=r.get("shared", ""))
+        except Exception as e:
+            return wa, wb, None
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = [ex.submit(work, p) for p in cousins]
+        for fu in as_completed(futs):
+            wa, wb, val = fu.result()
+            if val is not None:
+                results[f"{wa}|{wb}"] = val
+            done += 1
+            if progress and done % 20 == 0:
+                print(f"  ... {done}/{len(cousins)}", file=sys.stderr)
+    return results
 
 
 def main():
@@ -74,34 +85,17 @@ def main():
     print(f"[data] cousin пар (как в Шаге 3): {len(cousins)}")
 
     az = AzureJSON()
-    cache = load_cache()
-    print(f"[azure] model={az.model}; кэш={len(cache)} пар. Запрашиваю...", file=sys.stderr)
-
-    tasks = [(words[a], words[b], a, b) for a, b in cousins]
-
-    def work(t):
-        wa, wb, a, b = t
-        try:
-            r = query_pair(az, wa, wb, cache)
-            return (a, b, wa, wb, float(r.get("a_is_b", 0)), float(r.get("b_is_a", 0)),
-                    r.get("shared", ""))
-        except Exception as e:
-            return (a, b, wa, wb, None, None, f"ERR:{e}")
+    print(f"[azure] model={az.model}; LIVE без кэша. Запрашиваю...", file=sys.stderr)
+    fr = collect_frontier(cousins, words, az)
 
     rows = []
-    done = 0
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        futs = [ex.submit(work, t) for t in tasks]
-        for fu in as_completed(futs):
-            rows.append(fu.result())
-            done += 1
-            if done % 20 == 0:
-                print(f"  ... {done}/{len(tasks)}", file=sys.stderr)
-                save_cache(cache)
-    save_cache(cache)
-
-    good = [r for r in rows if r[4] is not None]
-    print(f"[azure] успешно: {len(good)}/{len(rows)}")
+    for a, b in cousins:
+        v = fr.get(f"{words[a]}|{words[b]}")
+        if v is None:
+            continue
+        rows.append((a, b, words[a], words[b], v["a_is_b"], v["b_is_a"], v["shared"]))
+    good = rows
+    print(f"[azure] успешно: {len(good)}/{len(cousins)}")
 
     O = [h_ic[a] - h_ic[b] for a, b, wa, wb, ab, ba, sh in good]
     Fr = [math.log(lemma_freq(a)) - math.log(lemma_freq(b)) for a, b, *_ in good]
@@ -134,14 +128,13 @@ def main():
     from step2_cost import resolve
     for wa, wb in classics:
         try:
-            r = query_pair(az, wa, wb, cache)
+            r = query_one(az, wa, wb)
         except Exception as e:
             print(f"    {wa:9s} {wb:9s}  ERR {e}"); continue
         a, b = resolve(wa, nodes), resolve(wb, nodes)
         our = (h_ic[a] - h_ic[b]) if (a and b) else float("nan")
         print(f"    {wa:9s} {wb:9s} {float(r.get('a_is_b',0)):5.0f} "
               f"{float(r.get('b_is_a',0)):5.0f} {our:+6.2f}  {r.get('shared','')}")
-    save_cache(cache)
     print("=" * 72)
 
 
