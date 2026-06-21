@@ -4,3 +4,4 @@ __pycache__/
 nltk_data/
 .env
 *.pem
+step3b_cache.json
