@@ -67,7 +67,7 @@ def descendants_map(nodes, parents):
     return desc, children
 
 
-def build_pairs(nodes, parents, depth, n_isa=120, n_cousin=120):
+def build_pairs(nodes, parents, n_isa=120, n_cousin=120):
     rng = random.Random(SEED)
     desc, children = descendants_map(nodes, parents)
     words = {n: good_word(n) for n in nodes}
