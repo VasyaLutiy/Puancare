@@ -2,3 +2,5 @@
 __pycache__/
 *.pyc
 nltk_data/
+.env
+*.pem
