@@ -7,7 +7,6 @@
   )
 
   (:init
-    (= (mem svc_a) 0)
     (= (min_safe_mem svc_a) 512)
     (= (total-cost) 0)
   )

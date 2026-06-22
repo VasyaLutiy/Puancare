@@ -7,23 +7,24 @@
 
   (:predicates
     (running ?s - service)
+    (mem_ok ?s - service)
     (config_applied ?s - service ?c - configopt)
   )
 
   (:functions
-    (mem ?s - service)
-    (min_safe_mem ?s - service)
+    (min_safe_mem ?s - service) - number
     (total-cost) - number
   )
 
   (:action set_mem
     :parameters (?s - service ?c - configopt)
     :precondition (and
+      (not (mem_ok ?s))
       (not (config_applied ?s ?c))
     )
     :effect (and
+      (mem_ok ?s)
       (config_applied ?s ?c)
-      (assign (mem ?s) (min_safe_mem ?s))
       (increase (total-cost) (min_safe_mem ?s))
     )
   )
@@ -32,7 +33,7 @@
     :parameters (?s - service)
     :precondition (and
       (not (running ?s))
-      (>= (mem ?s) (min_safe_mem ?s))
+      (mem_ok ?s)
     )
     :effect (and
       (running ?s)
