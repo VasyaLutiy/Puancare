@@ -139,38 +139,47 @@ class Agent:
 
 
 # ---------------------------------------------------------------------------
-# Self-test (M3: рождение правила)
+# Self-test (M3 + M4)
 # ---------------------------------------------------------------------------
 
 def _selftest() -> None:
-    from devops_agent.services import _GROUND_TRUTH, all_service_names
+    from devops_agent.services import MEM_BUCKETS, _GROUND_TRUTH
 
-    print("=== Agent self-test (M3: рождение правила) ===\n")
+    print("=== Agent self-test (M3: рождение правила / M4: перенос) ===\n")
     errors = []
 
     world = World()
-    bios  = BiosState.initial(["svc_a"])
+    # Один BIOS на оба эпизода — правила накапливаются между ними (M4)
+    bios  = BiosState.initial(["svc_a", "svc_d"])
     agent = Agent(world, bios, verbose=True)
 
-    result = agent.run_episode("svc_a")
+    # --- M3: svc_a — учимся с нуля ---
+    print("=== Эпизод 1: svc_a (учимся с нуля) ===")
+    r_a = agent.run_episode("svc_a")
+
+    min_safe_a = _GROUND_TRUTH["svc_a"]["min_safe_bucket"]
+    unsafe_expected_a = {("heavy", b) for b in MEM_BUCKETS if b < min_safe_a}
+
+    if not r_a.success:
+        errors.append(f"svc_a: ожидали success, got {r_a.error!r}")
+    if bios.unsafe_mem != unsafe_expected_a:
+        errors.append(f"svc_a: unsafe_mem={sorted(bios.unsafe_mem)}, ожидали {sorted(unsafe_expected_a)}")
+
+    # --- M4: svc_d — бесплатный перенос ---
+    print("\n=== Эпизод 2: svc_d (бесплатный перенос) ===")
+    r_d = agent.run_episode("svc_d")
 
     print(f"\n--- итог ---")
-    print(f"success:  {result.success}")
-    print(f"n_trials: {result.n_trials}")
-    print(f"n_learned:{result.n_learned}")
-    print(f"unsafe_mem после эпизода: {sorted(bios.unsafe_mem)}")
+    print(f"svc_a: success={r_a.success}, trials={r_a.n_trials}, learned={r_a.n_learned}")
+    print(f"svc_d: success={r_d.success}, trials={r_d.n_trials}, learned={r_d.n_learned}")
+    print(f"unsafe_mem (общий): {sorted(bios.unsafe_mem)}")
 
-    # Ожидания из ground truth
-    min_safe = _GROUND_TRUTH["svc_a"]["min_safe_bucket"]
-    from devops_agent.services import MEM_BUCKETS
-    unsafe_expected = {("heavy", b) for b in MEM_BUCKETS if b < min_safe}
-
-    if not result.success:
-        errors.append(f"Ожидали success=True, got error={result.error!r}")
-    if result.n_trials != result.n_learned + 1:
-        errors.append(f"Ожидали n_trials = n_learned + 1, got {result.n_trials}/{result.n_learned}")
-    if bios.unsafe_mem != unsafe_expected:
-        errors.append(f"unsafe_mem: ожидали {sorted(unsafe_expected)}, got {sorted(bios.unsafe_mem)}")
+    if not r_d.success:
+        errors.append(f"svc_d: ожидали success, got {r_d.error!r}")
+    if r_d.n_trials != 1:
+        errors.append(f"svc_d: ожидали 1 пробу (перенос), got {r_d.n_trials}")
+    if r_d.n_learned != 0:
+        errors.append(f"svc_d: ожидали 0 новых правил, got {r_d.n_learned}")
 
     print()
     if errors:
@@ -179,7 +188,7 @@ def _selftest() -> None:
             print(f"  {e}")
         sys.exit(1)
     else:
-        print("Рождение правила подтверждено. M3 OK.")
+        print("M3 + M4 OK. Рождение правила и бесплатный перенос подтверждены.")
 
 
 if __name__ == "__main__":

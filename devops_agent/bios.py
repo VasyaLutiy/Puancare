@@ -52,11 +52,20 @@ get_environment().credits_stream = None  # убираем баннер UP
 class BiosState:
     """
     Читаемое/редактируемое состояние агента.
-    Агент меняет unsafe_mem → compile_to_up → plan → replan.
+    Один экземпляр живёт на весь сеанс — правила накапливаются между эпизодами.
+
+    Поля:
+      services      — наблюдаемые фичи сервисов (agent_view), без cmd/чисел
+      buckets       — доступные бакеты памяти [MiB], отсортированы по возрастанию
+      unsafe_mem    — выученные правила: {(workload_class, bucket_mib)}
+      reverse_index — заглушка M6: symptom → [(workload_class, bucket), ...]
+                      Сейчас пуст; агент будет заполнять его в M6 для
+                      быстрой диагностики без перебора.
     """
     services: dict[str, dict]        # {svc_name: agent_view(svc_name)}
     buckets: list[int]               # MEM_BUCKETS, отсортированы по возрастанию
-    unsafe_mem: set[tuple[str, int]] # {(workload_class, bucket_mib)} — выученные правила
+    unsafe_mem: set[tuple[str, int]] # {(workload_class, bucket_mib)}
+    reverse_index: dict[str, list[tuple[str, int]]] = field(default_factory=dict)
 
     @classmethod
     def initial(cls, svc_names: list[str]) -> "BiosState":
