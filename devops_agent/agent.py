@@ -21,10 +21,15 @@ from dataclasses import dataclass, field
 from devops_agent.bios import BiosState, plan
 from devops_agent.world import Obs, World
 
-# Очевидные дефолты — используются когда oracle=None (M3-M5b) или как fallback
-_DEFAULT_CAUSES: dict[str, str] = {
+# Симптомы с очевидной причиной — оракул НЕ вызывается даже если доступен.
+# oom_killed = нехватка памяти (написано в названии; LLM здесь не нужен).
+_OBVIOUS_CAUSES: dict[str, str] = {
     "oom_killed": "memory",
-    "unhealthy":  "config",
+}
+
+# Fallback когда oracle=None и симптом не в _OBVIOUS_CAUSES
+_FALLBACK_CAUSES: dict[str, str] = {
+    "unhealthy": "config",
 }
 
 
@@ -113,7 +118,7 @@ class Agent:
     def __init__(self, world: World, bios: BiosState, oracle=None, verbose: bool = True):
         """
         oracle: devops_agent.oracle.Oracle или None.
-          None → используются _DEFAULT_CAUSES без LLM-вызовов (M3-M5b режим).
+          None → используются _FALLBACK_CAUSES без LLM-вызовов.
         """
         self.world = world
         self.bios = bios
@@ -177,30 +182,30 @@ class Agent:
             # 4. Execution gap — классифицируем симптом
             symptom = _classify_symptom(obs)
 
-            # 5. Diagnostic routing: reverse_index → oracle если пусто
+            # 5. Diagnostic routing
             oracle_used = False
             suspects = self.bios.reverse_index.get(symptom, [])
-            if not suspects:
-                if self.oracle is not None:
-                    # Cost-gated: вызываем LLM только при плоском приоре
-                    ctx = {"service": svc_name, "workload_class": wc,
-                           "mem_bucket": bucket, "config": config}
-                    causes = self.oracle.suggest_causes(symptom, ctx)
-                    cause = causes[0]
-                    # Записать в reverse_index (следующий раз — без оракула)
-                    self.bios.reverse_index[symptom] = [cause]
-                    episode_oracle_calls += 1
-                    oracle_used = True
-                    self._log(
-                        f"  oracle: {symptom!r} → {causes} "
-                        f"(total_calls={self.oracle.n_calls}, "
-                        f"tokens={self.oracle.total_tokens})"
-                    )
-                else:
-                    # Нет оракула: дефолтная причина (очевидна для oom_killed)
-                    cause = _DEFAULT_CAUSES.get(symptom, "memory")
-            else:
+            if suspects:
                 cause = suspects[0]
+            elif symptom in _OBVIOUS_CAUSES:
+                # Очевидная причина — оракул не нужен даже если доступен
+                cause = _OBVIOUS_CAUSES[symptom]
+            elif self.oracle is not None:
+                # Cost-gated: LLM только на плоском приоре неочевидного симптома
+                ctx = {"service": svc_name, "workload_class": wc,
+                       "mem_bucket": bucket, "config": config}
+                causes = self.oracle.suggest_causes(symptom, ctx)
+                cause = causes[0]
+                self.bios.reverse_index[symptom] = [cause]
+                episode_oracle_calls += 1
+                oracle_used = True
+                self._log(
+                    f"  oracle: {symptom!r} → {causes} "
+                    f"(total_calls={self.oracle.n_calls}, "
+                    f"tokens={self.oracle.total_tokens})"
+                )
+            else:
+                cause = _FALLBACK_CAUSES.get(symptom, "memory")
 
             last_symptom = symptom
             last_cause = cause
