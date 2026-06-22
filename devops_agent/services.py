@@ -1,20 +1,23 @@
 """
 Реестр синтетических сервисов.
 
-Агент видит только SERVICES (image, workload_class, cmd).
-_GROUND_TRUTH — наше знание; агент его не получает.
+Агент получает только agent_view(svc_name) → {name, workload_class, image}.
+cmd и числа аллокации — внутренняя механика sandbox, агент её не видит.
+
+_GROUND_TRUTH — наше знание (ground truth); агент его не получает никогда.
 """
 
 MEM_BUCKETS = [64, 128, 256, 512, 1024]  # MiB
 
-# Python overhead в 3.11-slim ~40 MiB; учтено в выборе footprint.
-# bytearray(N) нулирует память → все страницы физически выделяются.
+_IMAGE = "python:3.11-slim"
+
+
 def _alloc_cmd(mib: int) -> str:
     """
-    Python one-liner для Docker -c.
-    bytearray на Linux ленив (lazy mmap/calloc) — страницы не выделяются
+    Python-код для Docker -c.
+    bytearray на Linux ленив (lazy mmap) — страницы не выделяются
     физически до первого обращения. Явно трогаем каждую страницу (4 KiB),
-    чтобы RSS отражал реальное потребление и OOM срабатывал честно.
+    чтобы RSS точно отражал footprint и OOM срабатывал честно.
     """
     n = mib * 1024 * 1024
     return (
@@ -26,31 +29,59 @@ def _alloc_cmd(mib: int) -> str:
     )
 
 
-SERVICES = {
+# Полные записи сервисов — содержат cmd (механику sandbox).
+# Агент к этому словарю НЕ обращается напрямую; только через agent_view().
+_SERVICES = {
     "svc_a": {
-        "image": "python:3.11-slim",
+        "image": _IMAGE,
         "workload_class": "heavy",
-        # физический footprint ~350 MiB → OOM при ≤256 MiB, безопасно при ≥512 MiB
+        # footprint ~350 MiB → OOM при ≤256 MiB, safe при ≥512 MiB
         "cmd": ["python", "-c", _alloc_cmd(350)],
     },
     "svc_b": {
-        "image": "python:3.11-slim",
+        "image": _IMAGE,
         "workload_class": "light",
-        # физический footprint ~65 MiB → OOM при 64 MiB, безопасно при ≥128 MiB
+        # footprint ~65 MiB → OOM при 64 MiB, safe при ≥128 MiB
         "cmd": ["python", "-c", _alloc_cmd(65)],
     },
     "svc_c": {
-        "image": "python:3.11-slim",
-        "workload_class": "heavy",
-        # физический footprint ~800 MiB → OOM при ≤512 MiB, безопасно при ≥1024 MiB
+        "image": _IMAGE,
+        "workload_class": "extreme",
+        # footprint ~800 MiB → OOM при ≤512 MiB, safe при ≥1024 MiB
+        # counter-example: heavy-правило (safe@512) здесь НЕ переносится — карвит область
         "cmd": ["python", "-c", _alloc_cmd(800)],
+    },
+    "svc_d": {
+        "image": _IMAGE,
+        "workload_class": "heavy",
+        # footprint ~380 MiB → OOM при ≤256 MiB, safe при ≥512 MiB
+        # M5: чистый zero-shot перенос правила heavy→512 с svc_a
+        "cmd": ["python", "-c", _alloc_cmd(380)],
     },
 }
 
 # Истина: минимальный безопасный бакет для каждого сервиса.
-# Агент должен это ВЫУЧИТЬ, не получить готовым.
+# Агент должен это ВЫУЧИТЬ через пробы, не получить готовым.
 _GROUND_TRUTH = {
     "svc_a": {"footprint_mib": 350, "min_safe_bucket": 512},
     "svc_b": {"footprint_mib": 65,  "min_safe_bucket": 128},
     "svc_c": {"footprint_mib": 800, "min_safe_bucket": 1024},
+    "svc_d": {"footprint_mib": 380, "min_safe_bucket": 512},
 }
+
+
+def agent_view(svc_name: str) -> dict:
+    """
+    Единственный способ для агента узнать о сервисе.
+    Возвращает только наблюдаемые признаки — без cmd, без чисел аллокации.
+    """
+    svc = _SERVICES[svc_name]
+    return {
+        "name": svc_name,
+        "workload_class": svc["workload_class"],
+        "image": svc["image"],
+    }
+
+
+def all_service_names() -> list[str]:
+    return list(_SERVICES.keys())

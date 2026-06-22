@@ -13,7 +13,13 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
-from devops_agent.services import MEM_BUCKETS, SERVICES, _GROUND_TRUTH
+from devops_agent.services import (
+    MEM_BUCKETS,
+    _GROUND_TRUTH,
+    _SERVICES,
+    agent_view,
+    all_service_names,
+)
 
 
 @dataclass
@@ -27,10 +33,19 @@ class Obs:
 
 
 def _run(args: list[str], timeout: int = 60) -> subprocess.CompletedProcess:
-    # ubuntu не в группе docker в текущей сессии — используем sudo
+    # ubuntu не в группе docker в текущей сессии → sudo
+    # (группа добавлена, но требует нового логина; sudo без пароля настроен)
     if args and args[0] == "docker":
         args = ["sudo"] + args
     return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+
+
+def _prefetch_image(image: str) -> None:
+    """Явный pull образа до первого docker run, чтобы не влиять на timeout."""
+    check = _run(["docker", "image", "inspect", image])
+    if check.returncode != 0:
+        print(f"  [pull] {image} ...", flush=True)
+        subprocess.run(["sudo", "docker", "pull", image], check=True, timeout=300)
 
 
 class World:
@@ -38,20 +53,21 @@ class World:
         """
         Запускает сервис в Docker с заданным лимитом памяти.
         Возвращает Obs из docker inspect — один spec, один Obs.
+        Агент передаёт spec; World сам находит cmd в _SERVICES (агент cmd не видит).
         """
         svc_name = spec["service"]
         mem_bucket = spec["mem_bucket"]
 
-        if svc_name not in SERVICES:
+        if svc_name not in _SERVICES:
             raise ValueError(f"Unknown service: {svc_name!r}")
         if mem_bucket not in MEM_BUCKETS:
             raise ValueError(f"Bad mem_bucket={mem_bucket}, allowed: {MEM_BUCKETS}")
 
-        svc = SERVICES[svc_name]
+        svc = _SERVICES[svc_name]
         container = f"devops-{svc_name}-{mem_bucket}"
         mem_flag = f"{mem_bucket}m"
 
-        # Гарантируем чистое состояние перед запуском
+        # Гарантируем чистое состояние
         _run(["docker", "rm", "-f", container])
 
         try:
@@ -60,16 +76,21 @@ class World:
                     "docker", "run",
                     "--name", container,
                     "--memory", mem_flag,
-                    "--memory-swap", mem_flag,  # swap = 0, чтобы OOM был честным
+                    "--memory-swap", mem_flag,  # swap=0 → OOM честный
                     svc["image"],
                 ] + svc["cmd"],
-                timeout=30,
+                timeout=60,
             )
 
             result = _run(
                 ["docker", "inspect", container, "--format", "{{json .State}}"]
             )
-            state = json.loads(result.stdout.strip())
+
+            try:
+                state = json.loads(result.stdout.strip())
+            except json.JSONDecodeError:
+                # inspect вернул пусто: контейнер не создался или docker упал
+                return Obs(phase="error", exit_code=-1, oom_killed=False)
 
             oom_killed = bool(state.get("OOMKilled", False))
             exit_code = int(state.get("ExitCode", -1))
@@ -87,27 +108,40 @@ class World:
             return Obs(phase="error", exit_code=-1, oom_killed=False)
 
         finally:
+            # rm -f останавливает и удаляет контейнер даже если он ещё работает
+            # (нужно при TimeoutExpired — docker run убивает клиент, но не контейнер)
             _run(["docker", "rm", "-f", container])
 
 
-def _selftest():
+def _build_selftest_cases() -> list[tuple[str, int, bool]]:
+    """
+    Строит тест-кейсы из _GROUND_TRUTH (DRY): для каждого сервиса
+    берём бакет ниже порога (ожидаем OOM) и сам порог (ожидаем running).
+    """
+    cases = []
+    for svc_name, truth in _GROUND_TRUTH.items():
+        min_safe = truth["min_safe_bucket"]
+        idx = MEM_BUCKETS.index(min_safe)
+        if idx > 0:
+            cases.append((svc_name, MEM_BUCKETS[idx - 1], True))   # ниже порога → OOM
+        cases.append((svc_name, min_safe, False))                   # на пороге → running
+    return cases
+
+
+def _selftest() -> None:
     world = World()
     errors = []
 
-    cases = [
-        # (service, bucket, expect_oom)
-        ("svc_a", 256,  True),
-        ("svc_a", 512,  False),
-        ("svc_b", 64,   True),
-        ("svc_b", 128,  False),
-        ("svc_c", 512,  True),
-        ("svc_c", 1024, False),
-    ]
-
+    # Пре-пул всех образов — чтобы pull не считался в timeout docker run
+    images = {_SERVICES[s]["image"] for s in all_service_names()}
     print("=== World self-test ===\n")
+    for img in images:
+        _prefetch_image(img)
+
+    cases = _build_selftest_cases()
+    print()
     for svc, bucket, expect_oom in cases:
-        spec = {"service": svc, "mem_bucket": bucket}
-        obs = world.apply(spec)
+        obs = world.apply({"service": svc, "mem_bucket": bucket})
         ok = obs.oom_killed == expect_oom
         status = "OK" if ok else "FAIL"
         label = f"{svc} @ {bucket} MiB"
@@ -122,7 +156,7 @@ def _selftest():
             print(f"  {e}")
         sys.exit(1)
     else:
-        print("All cases passed. Ground-truth holds.")
+        print(f"All {len(cases)} cases passed. Ground-truth holds.")
 
 
 if __name__ == "__main__":
