@@ -73,20 +73,11 @@ class EpisodeResult:
 # Вспомогательные функции
 # ---------------------------------------------------------------------------
 
-_BUCKET_RE = re.compile(r'set_mem\(b(\d+)\)')
-_CONFIG_RE = re.compile(r'set_config\((\w+)\)')
-
-
-def _extract_bucket(steps: list[str]) -> int:
-    for step in steps:
-        m = _BUCKET_RE.search(step)
-        if m:
-            return int(m.group(1))
-    raise ValueError(f"No set_mem step in plan: {steps}")
+_CONFIG_RE = re.compile(r'set_config\(\w+,\s*(\w+)\)')
 
 
 def _extract_config(steps: list[str]) -> str:
-    """Извлечь config из 'set_config(good)'. Default 'good' если нет set_config."""
+    """Извлечь config из 'set_config(svc, good)'. Default 'good' если нет set_config."""
     for step in steps:
         m = _CONFIG_RE.search(step)
         if m:
@@ -155,7 +146,7 @@ class Agent:
                     error="no_plan",
                 )
 
-            bucket = _extract_bucket(steps)
+            bucket = self.bios.safe_buckets_for(svc_name)[0]
             config = _extract_config(steps)
             self._log(f"  plan: {steps}")
 

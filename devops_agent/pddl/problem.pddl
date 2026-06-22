@@ -1,19 +1,16 @@
-(define (problem devops-p0)
+(define (problem devops-p)
   (:domain devops)
 
   (:objects
-    svc_a - service
-    cfg0  - configopt
-  )
+    svc_e - service
+    bad good - configopt)
 
   (:init
-    (= (min_safe_mem svc_a) 512)
+    (= (mem_cost svc_e) 512)
     (= (total-cost) 0)
+    (config_ok svc_e good)
   )
 
-  (:goal
-    (running svc_a)
-  )
+  (:goal (running svc_e))
 
-  (:metric minimize (total-cost))
-)
+  (:metric minimize (total-cost)))
