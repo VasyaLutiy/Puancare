@@ -1,7 +1,5 @@
-.venv/
+.env
 __pycache__/
 *.pyc
-nltk_data/
-.env
-*.pem
-step3b_cache.json
+.venv/
+*.egg-info/

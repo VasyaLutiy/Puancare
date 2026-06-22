@@ -1,2 +1,3 @@
-nltk>=3.8
-networkx>=3.0
+unified-planning
+up-pyperplan
+openai>=1.40
