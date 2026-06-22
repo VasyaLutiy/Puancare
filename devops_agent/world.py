@@ -17,7 +17,9 @@ import json
 import subprocess
 import sys
 from dataclasses import dataclass
+from types import SimpleNamespace
 
+from devops_agent.model.ontology import WorldModel as _WorldModel
 from devops_agent.services import (
     MEM_BUCKETS,
     _GROUND_TRUTH,
@@ -25,6 +27,8 @@ from devops_agent.services import (
     agent_view,
     all_service_names,
 )
+
+_wm = _WorldModel.load()
 
 
 @dataclass
@@ -97,16 +101,7 @@ class World:
 
             oom_killed = bool(state.get("OOMKilled", False))
             exit_code  = int(state.get("ExitCode", -1))
-
-            if oom_killed:
-                phase = "oom_killed"
-            elif exit_code == 0:
-                phase = "running"
-            elif exit_code == 3 and not oom_killed:
-                phase = "unhealthy"   # sentinel: плохой config (svc_e exit(3))
-            else:
-                phase = "error"
-
+            phase = _wm.classify(SimpleNamespace(oom_killed=oom_killed, exit_code=exit_code))
             return Obs(phase=phase, exit_code=exit_code, oom_killed=oom_killed)
 
         except subprocess.TimeoutExpired:

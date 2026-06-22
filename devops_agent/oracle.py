@@ -19,8 +19,9 @@ if str(_root) not in sys.path:
 
 from utils_azure import AzureJSON  # noqa: E402
 
-# Закрытый словарь причин v1
-CAUSES: list[str] = ["memory", "config"]
+from devops_agent.model.ontology import WorldModel as _WorldModel
+
+_wm = _WorldModel.load()
 
 
 class Oracle:
@@ -42,13 +43,14 @@ class Oracle:
 
     def suggest_causes(self, symptom: str, context: dict) -> list[str]:
         """
-        Возвращает ранжированный список из CAUSES, наиболее вероятное — первым.
-        Всегда возвращает хотя бы один элемент (fallback = CAUSES).
+        Возвращает ранжированный список из wm.causes, наиболее вероятное — первым.
+        Всегда возвращает хотя бы один элемент (fallback = wm.causes).
         """
+        _causes = _wm.causes
         system = (
             "You are a DevOps diagnostic assistant. "
             "Given a service symptom and context, rank root causes by likelihood.\n"
-            f"Use ONLY causes from this closed set: {CAUSES}.\n"
+            f"Use ONLY causes from this closed set: {_causes}.\n"
             "Most likely cause first. Respond with valid JSON only."
         )
         user = f"symptom: {symptom!r}\ncontext: {context}"
@@ -56,7 +58,7 @@ class Oracle:
         result = self._az.ask(
             system=system,
             user=user,
-            schema={"causes": f"list, most-likely-first, values only from {CAUSES}"},
+            schema={"causes": f"list, most-likely-first, values only from {_causes}"},
         )
 
         # Учёт токенов из _last_usage (добавлено в utils_azure.ask)
@@ -68,8 +70,8 @@ class Oracle:
         raw = result.get("causes", [])
         if isinstance(raw, str):
             raw = [c.strip() for c in raw.split(",")]
-        valid = [c for c in raw if c in CAUSES]
-        return valid if valid else list(CAUSES)
+        valid = [c for c in raw if c in _causes]
+        return valid if valid else list(_causes)
 
 
 # ---------------------------------------------------------------------------

@@ -19,18 +19,10 @@ import sys
 from dataclasses import dataclass, field
 
 from devops_agent.bios import BiosState, plan
+from devops_agent.model.ontology import WorldModel as _WorldModel
 from devops_agent.world import Obs, World
 
-# Симптомы с очевидной причиной — оракул НЕ вызывается даже если доступен.
-# oom_killed = нехватка памяти (написано в названии; LLM здесь не нужен).
-_OBVIOUS_CAUSES: dict[str, str] = {
-    "oom_killed": "memory",
-}
-
-# Fallback когда oracle=None и симптом не в _OBVIOUS_CAUSES
-_FALLBACK_CAUSES: dict[str, str] = {
-    "unhealthy": "config",
-}
+_wm = _WorldModel.load()
 
 
 # ---------------------------------------------------------------------------
@@ -85,14 +77,6 @@ def _extract_config(steps: list[str]) -> str:
     return "good"
 
 
-def _classify_symptom(obs: Obs) -> str:
-    if obs.oom_killed:
-        return "oom_killed"
-    if obs.phase == "unhealthy":
-        return "unhealthy"
-    return "error"
-
-
 def _bump_reverse(reverse_index: dict[str, list[str]], symptom: str, cause: str) -> None:
     """Поднять cause на первое место в reverse_index[symptom]."""
     causes = reverse_index.setdefault(symptom, [])
@@ -109,7 +93,7 @@ class Agent:
     def __init__(self, world: World, bios: BiosState, oracle=None, verbose: bool = True):
         """
         oracle: devops_agent.oracle.Oracle или None.
-          None → используются _FALLBACK_CAUSES без LLM-вызовов.
+          None → используются fallback-причины из онтологии без LLM-вызовов.
         """
         self.world = world
         self.bios = bios
@@ -171,16 +155,16 @@ class Agent:
                 )
 
             # 4. Execution gap — классифицируем симптом
-            symptom = _classify_symptom(obs)
+            symptom = _wm.classify(obs)
 
             # 5. Diagnostic routing
             oracle_used = False
             suspects = self.bios.reverse_index.get(symptom, [])
             if suspects:
                 cause = suspects[0]
-            elif symptom in _OBVIOUS_CAUSES:
+            elif _wm.obvious_cause(symptom) is not None:
                 # Очевидная причина — оракул не нужен даже если доступен
-                cause = _OBVIOUS_CAUSES[symptom]
+                cause = _wm.obvious_cause(symptom)
             elif self.oracle is not None:
                 # Cost-gated: LLM только на плоском приоре неочевидного симптома
                 ctx = {"service": svc_name, "workload_class": wc,
@@ -196,15 +180,16 @@ class Agent:
                     f"tokens={self.oracle.total_tokens})"
                 )
             else:
-                cause = _FALLBACK_CAUSES.get(symptom, "memory")
+                cause = _wm.fallback_cause(symptom) or "memory"
 
             last_symptom = symptom
             last_cause = cause
             trials.append(Trial(bucket=bucket, config=config, obs=obs,
                                 learned=True, oracle_used=oracle_used))
 
-            # 6. Apply fix
-            if cause == "memory":
+            # 6. Apply fix (диспетчер по repair_kind из онтологии)
+            rk = _wm.repair_kind(cause)
+            if rk == "mem_threshold":
                 if self.bios.is_class_confirmed_safe(wc, bucket):
                     self.bios.mark_unsafe_svc(svc_name, bucket)
                     self._log(
@@ -215,13 +200,13 @@ class Agent:
                     self._log(
                         f"  gap: OOM@{bucket}→unsafe-mem({wc},{bucket})"
                     )
-            elif cause == "config":
+            elif rk == "bad_config":
                 self.bios.mark_bad_config(svc_name, config)
                 self._log(
                     f"  gap: unhealthy@config={config!r}→bad_config({svc_name},{config!r})"
                 )
             else:
-                self._log(f"  unknown cause {cause!r}, skipping fix")
+                self._log(f"  unknown repair kind for cause {cause!r}, skipping fix")
 
             # 7. Unexpected (не OOM, не unhealthy)
             if obs.phase == "error":

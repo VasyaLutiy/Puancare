@@ -1,0 +1,30 @@
+# sensors: docker State (obs) → phase. Первое сработавшее правило побеждает.
+# Порядок ВАЖЕН: oom первым (exit_code может быть 137 при OOM).
+sensors:
+  - when: {oom_killed: true}
+    phase: oom_killed
+  - when: {exit_code: 0}
+    phase: running
+  - when: {exit_code: 3}
+    phase: unhealthy
+  - else: true
+    phase: error
+
+# running — успех, в симптомы НЕ входит
+symptoms: [oom_killed, unhealthy, error]
+
+# closed set причин для oracle.py (бывший CAUSES)
+causes: [memory, config]
+
+# симптом → причина БЕЗ oracle (бывший _OBVIOUS_CAUSES)
+obvious:
+  oom_killed: memory
+
+# симптом → причина при oracle=None (бывший _FALLBACK_CAUSES)
+fallback:
+  unhealthy: config
+
+# cause → как чинить BIOS (ссылается на проекцию в domain.pddl)
+repair:
+  memory: {kind: mem_threshold, carve: true}   # mark_unsafe / mark_unsafe_svc → mem_cost
+  config: {kind: bad_config}                    # mark_bad_config → config_ok
