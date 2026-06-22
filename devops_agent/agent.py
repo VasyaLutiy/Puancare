@@ -116,16 +116,29 @@ class Agent:
 
             # 4. Compare
             if obs.phase == predicted:
+                # Подтвердить: этот (wc, bucket) реально безопасен
+                self.bios.confirm_safe(wc, bucket)
                 trials.append(Trial(bucket=bucket, obs=obs, learned=False))
                 self._log(f"  ✓ running @ {bucket} MiB — эпизод завершён за {len(trials)} проб(ы)")
                 return EpisodeResult(svc_name=svc_name, success=True, trials=trials)
 
             # 5. Execution gap
             if obs.oom_killed:
-                # 6. Learn: пометить бакет как unsafe для данного workload_class
-                self.bios.mark_unsafe(wc, bucket)
-                trials.append(Trial(bucket=bucket, obs=obs, learned=True))
-                self._log(f"  gap: OOM @ {bucket} MiB → unsafe-mem({wc!r}, {bucket}) → replan")
+                # 6. Learn — два случая:
+                if self.bios.is_class_confirmed_safe(wc, bucket):
+                    # Другой сервис того же класса уже успешно работал при этом бакете.
+                    # Нельзя трогать класс-правило → per-service исключение (карвинг).
+                    self.bios.mark_unsafe_svc(svc_name, bucket)
+                    trials.append(Trial(bucket=bucket, obs=obs, learned=True))
+                    self._log(
+                        f"  carving: {wc}@{bucket} подтверждён безопасным для класса, "
+                        f"но {svc_name} OOM → исключение ({svc_name},{bucket}) → replan"
+                    )
+                else:
+                    # Первый OOM для (wc, bucket) → обновляем класс-правило
+                    self.bios.mark_unsafe(wc, bucket)
+                    trials.append(Trial(bucket=bucket, obs=obs, learned=True))
+                    self._log(f"  gap: OOM @ {bucket} MiB → unsafe-mem({wc!r}, {bucket}) → replan")
                 # 7. Replan (следующая итерация)
                 continue
 
@@ -145,81 +158,88 @@ class Agent:
 def _selftest() -> None:
     from devops_agent.services import MEM_BUCKETS, _GROUND_TRUTH
 
-    print("=== Agent self-test (M3 / M4 / M5) ===\n")
+    print("=== Agent self-test (M3 / M4 / M5 / M5b) ===\n")
     errors = []
 
     world = World()
-    # Один BIOS на все эпизоды — правила накапливаются между ними
     bios  = BiosState.initial(["svc_a", "svc_b", "svc_c", "svc_d"])
     agent = Agent(world, bios, verbose=True)
 
-    # --- M3: svc_a — учимся с нуля ---
-    print("=== Эпизод 1: svc_a (учимся с нуля) ===")
+    # M3: svc_a — учимся с нуля (heavy → safe@512)
+    print("=== Эпизод 1: svc_a (heavy, учимся с нуля) ===")
     r_a = agent.run_episode("svc_a")
 
-    # --- M4: svc_d — бесплатный перенос (heavy → safe@512) ---
-    print("\n=== Эпизод 2: svc_d (бесплатный перенос, heavy→512) ===")
+    # M4: svc_d — бесплатный перенос (heavy → safe@512, 1 проба)
+    print("\n=== Эпизод 2: svc_d (heavy, бесплатный перенос) ===")
     r_d = agent.run_episode("svc_d")
 
-    # --- M5: svc_b — независимый класс light → safe@128 ---
-    print("\n=== Эпизод 3: svc_b (light → safe@128) ===")
+    # M5: svc_b — независимый класс light → safe@128
+    print("\n=== Эпизод 3: svc_b (light, независимый класс) ===")
     r_b = agent.run_episode("svc_b")
 
-    # --- M5: svc_c — независимый класс extreme → safe@1024 ---
-    print("\n=== Эпизод 4: svc_c (extreme → safe@1024) ===")
+    # M5b: svc_c — тоже heavy, но safe@1024 → класс-правило ломается → карвинг
+    print("\n=== Эпизод 4: svc_c (heavy, карвинг-исключение) ===")
     r_c = agent.run_episode("svc_c")
 
-    # --- Сводка по классам ---
-    print("\n" + "=" * 50)
+    # --- Сводка ---
+    print("\n" + "=" * 55)
     print("СВОДКА (trials / learned / success)")
-    print("=" * 50)
+    print("=" * 55)
     rows = [
-        ("svc_a", "heavy",   r_a),
-        ("svc_d", "heavy",   r_d),
-        ("svc_b", "light",   r_b),
-        ("svc_c", "extreme", r_c),
+        ("svc_a", "heavy", r_a),
+        ("svc_d", "heavy", r_d),
+        ("svc_b", "light", r_b),
+        ("svc_c", "heavy", r_c),
     ]
     for name, wc, r in rows:
-        print(f"  {name:6s} [{wc:7s}]  trials={r.n_trials}  learned={r.n_learned}  ok={r.success}")
+        print(f"  {name:6s} [{wc:5s}]  trials={r.n_trials}  learned={r.n_learned}  ok={r.success}")
 
-    # Ожидаемые правила по классу (из ground truth)
-    expected_unsafe: set[tuple[str, int]] = set()
-    for name, truth in _GROUND_TRUTH.items():
-        wc  = bios.services[name]["workload_class"]
-        for b in MEM_BUCKETS:
-            if b < truth["min_safe_bucket"]:
-                expected_unsafe.add((wc, b))
+    print(f"\nunsafe_mem (класс-правила): {sorted(bios.unsafe_mem)}")
+    print(f"unsafe_svc (исключения):    {sorted(bios.unsafe_svc)}")
+    print(f"known_safe_class:           {sorted(bios.known_safe_class)}")
 
-    print(f"\nunsafe_mem итого: {sorted(bios.unsafe_mem)}")
+    # --- Честный вывод об ограничении ---
+    print(
+        "\n[NOTE] svc_c — тоже heavy, но порог выше (1024 vs 512). "
+        "Агент не нашёл более тонкой наблюдаемой фичи (workload_class одинаков). "
+        "Специализация выродилась в per-instance исключение: unsafe_svc={(svc_c,512)}. "
+        "Класс-правило heavy→512 при этом цело (svc_a/svc_d не затронуты)."
+    )
 
     # --- Проверки ---
     for name, _, r in rows:
         if not r.success:
             errors.append(f"{name}: ожидали success, got {r.error!r}")
 
-    # M4: svc_d — перенос за 1 пробу
+    # M4: svc_d — 1 проба
     if r_d.n_trials != 1:
         errors.append(f"svc_d: ожидали 1 пробу (transfer), got {r_d.n_trials}")
 
-    # M5: svc_b — только light-правила, нет кросс-загрязнения
-    light_rules = {(wc, b) for (wc, b) in bios.unsafe_mem if wc == "light"}
-    heavy_rules = {(wc, b) for (wc, b) in bios.unsafe_mem if wc == "heavy"}
-    extreme_rules = {(wc, b) for (wc, b) in bios.unsafe_mem if wc == "extreme"}
+    # M5b: класс-правило heavy@512 НЕ сломано
+    if ("heavy", 512) in bios.unsafe_mem:
+        errors.append("unsafe_mem содержит (heavy,512) — класс-правило сломано!")
 
-    if light_rules & heavy_rules:
-        errors.append(f"Кросс-загрязнение light↔heavy: {light_rules & heavy_rules}")
-    if light_rules & extreme_rules:
-        errors.append(f"Кросс-загрязнение light↔extreme: {light_rules & extreme_rules}")
-    if heavy_rules & extreme_rules:
-        errors.append(f"Кросс-загрязнение heavy↔extreme: {heavy_rules & extreme_rules}")
+    # M5b: карвинг-исключение на месте
+    if ("svc_c", 512) not in bios.unsafe_svc:
+        errors.append("unsafe_svc не содержит (svc_c,512) — карвинг не сработал")
 
-    # Полное совпадение с ground truth
-    if bios.unsafe_mem != expected_unsafe:
-        errors.append(
-            f"unsafe_mem не совпадает с ground truth:\n"
-            f"  got:      {sorted(bios.unsafe_mem)}\n"
-            f"  expected: {sorted(expected_unsafe)}"
-        )
+    # svc_a/svc_d: планируют по-прежнему на b512
+    from devops_agent.bios import plan as bios_plan
+    plan_a  = bios_plan(bios, "svc_a")
+    plan_d  = bios_plan(bios, "svc_d")
+    if plan_a is None or not any("b512" in s for s in plan_a):
+        errors.append(f"svc_a больше не планирует на b512: {plan_a}")
+    if plan_d is None or not any("b512" in s for s in plan_d):
+        errors.append(f"svc_d больше не планирует на b512: {plan_d}")
+
+    # Нет кросс-загрязнения: ни одно правило не меняет класс другого.
+    # Кросс-загрязнение = одна и та же пара (wc, b) попала в оба класса —
+    # невозможно по построению (mark_unsafe всегда пишет конкретный wc).
+    # Проверяем структурно: множества (wc,b) для разных wc не пересекаются.
+    light_pairs = {(wc, b) for (wc, b) in bios.unsafe_mem if wc == "light"}
+    heavy_pairs = {(wc, b) for (wc, b) in bios.unsafe_mem if wc == "heavy"}
+    if light_pairs & heavy_pairs:
+        errors.append(f"Кросс-загрязнение light↔heavy: {light_pairs & heavy_pairs}")
 
     print()
     if errors:
@@ -228,7 +248,7 @@ def _selftest() -> None:
             print(f"  {e}")
         sys.exit(1)
     else:
-        print("M3 + M4 + M5 OK. Партиции чистые, кросс-загрязнения нет.")
+        print("M3 + M4 + M5 + M5b OK.")
 
 
 if __name__ == "__main__":

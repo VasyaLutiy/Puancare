@@ -46,9 +46,10 @@ _SERVICES = {
     },
     "svc_c": {
         "image": _IMAGE,
-        "workload_class": "extreme",
+        "workload_class": "heavy",
         # footprint ~800 MiB → OOM при ≤512 MiB, safe при ≥1024 MiB
-        # counter-example: heavy-правило (safe@512) здесь НЕ переносится — карвит область
+        # M5b: тоже heavy, но другой порог → класс-правило (heavy→512) ломается.
+        # Агент не находит более тонкой фичи → специализация выходит на per-instance исключение.
         "cmd": ["python", "-c", _alloc_cmd(800)],
     },
     "svc_d": {
@@ -65,7 +66,7 @@ _SERVICES = {
 _GROUND_TRUTH = {
     "svc_a": {"footprint_mib": 350, "min_safe_bucket": 512},
     "svc_b": {"footprint_mib": 65,  "min_safe_bucket": 128},
-    "svc_c": {"footprint_mib": 800, "min_safe_bucket": 1024},
+    "svc_c": {"footprint_mib": 800, "min_safe_bucket": 1024},  # heavy, но порог выше
     "svc_d": {"footprint_mib": 380, "min_safe_bucket": 512},
 }
 
