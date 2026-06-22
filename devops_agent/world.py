@@ -1,11 +1,16 @@
 """
 Sandbox-Gym: World.apply(spec) -> Obs
 
-spec  = {"service": str, "mem_bucket": int}
+spec  = {"service": str, "mem_bucket": int, "config": str}
+         config — опционален, default "good"
 Obs   = {phase, exit_code, oom_killed}
+         phase: "running" | "oom_killed" | "unhealthy" | "error"
 
-Одно применение — один детерминированный результат.
-Восприятие = парсинг структуры docker inspect, без NLP.
+Маппинг exit_code (детерминировано, без NLP):
+  OOMKilled=True           → oom_killed
+  exit_code=0              → running
+  exit_code=3, не OOM      → unhealthy  (sentinel svc_e)
+  иначе                    → error
 """
 
 import json
@@ -24,7 +29,7 @@ from devops_agent.services import (
 
 @dataclass
 class Obs:
-    phase: str       # "running" | "oom_killed" | "error"
+    phase: str       # "running" | "oom_killed" | "unhealthy" | "error"
     exit_code: int
     oom_killed: bool
 
@@ -34,14 +39,12 @@ class Obs:
 
 def _run(args: list[str], timeout: int = 60) -> subprocess.CompletedProcess:
     # ubuntu не в группе docker в текущей сессии → sudo
-    # (группа добавлена, но требует нового логина; sudo без пароля настроен)
     if args and args[0] == "docker":
         args = ["sudo"] + args
     return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
 
 
 def _prefetch_image(image: str) -> None:
-    """Явный pull образа до первого docker run, чтобы не влиять на timeout."""
     check = _run(["docker", "image", "inspect", image])
     if check.returncode != 0:
         print(f"  [pull] {image} ...", flush=True)
@@ -51,12 +54,13 @@ def _prefetch_image(image: str) -> None:
 class World:
     def apply(self, spec: dict) -> Obs:
         """
-        Запускает сервис в Docker с заданным лимитом памяти.
+        Запускает сервис в Docker с заданным лимитом памяти и config.
         Возвращает Obs из docker inspect — один spec, один Obs.
         Агент передаёт spec; World сам находит cmd в _SERVICES (агент cmd не видит).
         """
-        svc_name = spec["service"]
+        svc_name  = spec["service"]
         mem_bucket = spec["mem_bucket"]
+        config    = spec.get("config", "good")  # knob конфига, default "good"
 
         if svc_name not in _SERVICES:
             raise ValueError(f"Unknown service: {svc_name!r}")
@@ -65,9 +69,8 @@ class World:
 
         svc = _SERVICES[svc_name]
         container = f"devops-{svc_name}-{mem_bucket}"
-        mem_flag = f"{mem_bucket}m"
+        mem_flag  = f"{mem_bucket}m"
 
-        # Гарантируем чистое состояние
         _run(["docker", "rm", "-f", container])
 
         try:
@@ -76,7 +79,8 @@ class World:
                     "docker", "run",
                     "--name", container,
                     "--memory", mem_flag,
-                    "--memory-swap", mem_flag,  # swap=0 → OOM честный
+                    "--memory-swap", mem_flag,   # swap=0 → OOM честный
+                    "--env", f"CONFIG={config}", # knob для svc_e и других с config
                     svc["image"],
                 ] + svc["cmd"],
                 timeout=60,
@@ -89,16 +93,17 @@ class World:
             try:
                 state = json.loads(result.stdout.strip())
             except json.JSONDecodeError:
-                # inspect вернул пусто: контейнер не создался или docker упал
                 return Obs(phase="error", exit_code=-1, oom_killed=False)
 
             oom_killed = bool(state.get("OOMKilled", False))
-            exit_code = int(state.get("ExitCode", -1))
+            exit_code  = int(state.get("ExitCode", -1))
 
             if oom_killed:
                 phase = "oom_killed"
             elif exit_code == 0:
                 phase = "running"
+            elif exit_code == 3 and not oom_killed:
+                phase = "unhealthy"   # sentinel: плохой config (svc_e exit(3))
             else:
                 phase = "error"
 
@@ -108,23 +113,24 @@ class World:
             return Obs(phase="error", exit_code=-1, oom_killed=False)
 
         finally:
-            # rm -f останавливает и удаляет контейнер даже если он ещё работает
-            # (нужно при TimeoutExpired — docker run убивает клиент, но не контейнер)
+            # rm -f останавливает и удаляет даже работающий контейнер
             _run(["docker", "rm", "-f", container])
 
 
-def _build_selftest_cases() -> list[tuple[str, int, bool]]:
+def _build_selftest_cases() -> list[tuple]:
     """
-    Строит тест-кейсы из _GROUND_TRUTH (DRY): для каждого сервиса
-    берём бакет ниже порога (ожидаем OOM) и сам порог (ожидаем running).
+    Стандартные кейсы из _GROUND_TRUTH (memory dimension).
+    Для svc_e: используем good config — проверяем только memory boundary.
+    Дополнительные config-кейсы добавлены вручную ниже.
     """
     cases = []
     for svc_name, truth in _GROUND_TRUTH.items():
         min_safe = truth["min_safe_bucket"]
         idx = MEM_BUCKETS.index(min_safe)
+        config = truth.get("good_config", "good")
         if idx > 0:
-            cases.append((svc_name, MEM_BUCKETS[idx - 1], True))   # ниже порога → OOM
-        cases.append((svc_name, min_safe, False))                   # на пороге → running
+            cases.append((svc_name, MEM_BUCKETS[idx - 1], config, "oom_killed"))
+        cases.append((svc_name, min_safe, config, "running"))
     return cases
 
 
@@ -132,22 +138,33 @@ def _selftest() -> None:
     world = World()
     errors = []
 
-    # Пре-пул всех образов — чтобы pull не считался в timeout docker run
     images = {_SERVICES[s]["image"] for s in all_service_names()}
     print("=== World self-test ===\n")
     for img in images:
         _prefetch_image(img)
 
+    # Стандартные memory-кейсы
     cases = _build_selftest_cases()
+
+    # Дополнительные кейсы для svc_e (config dimension)
+    extra = [
+        ("svc_e", 512, "bad",  "unhealthy"),  # memory ok, bad config → unhealthy
+        ("svc_e", 512, "good", "running"),     # memory ok, good config → running
+        ("svc_e", 64,  "good", "oom_killed"),  # memory bad → oom (config не важен)
+    ]
+
     print()
-    for svc, bucket, expect_oom in cases:
-        obs = world.apply({"service": svc, "mem_bucket": bucket})
-        ok = obs.oom_killed == expect_oom
+    all_cases = cases + extra
+    for row in all_cases:
+        svc, bucket, config, expected_phase = row
+        spec = {"service": svc, "mem_bucket": bucket, "config": config}
+        obs = world.apply(spec)
+        ok = obs.phase == expected_phase
         status = "OK" if ok else "FAIL"
-        label = f"{svc} @ {bucket} MiB"
-        print(f"  [{status}] {label:20s}  {obs}")
+        label = f"{svc} @ {bucket} MiB config={config!r}"
+        print(f"  [{status}] {label:35s}  {obs}")
         if not ok:
-            errors.append(f"{label}: expected oom_killed={expect_oom}, got {obs}")
+            errors.append(f"{label}: expected phase={expected_phase!r}, got {obs}")
 
     print()
     if errors:
@@ -156,7 +173,7 @@ def _selftest() -> None:
             print(f"  {e}")
         sys.exit(1)
     else:
-        print(f"All {len(cases)} cases passed. Ground-truth holds.")
+        print(f"All {len(all_cases)} cases passed. Ground-truth holds.")
 
 
 if __name__ == "__main__":

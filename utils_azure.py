@@ -78,6 +78,7 @@ class AzureJSON:
             {"role": "user", "content": user},
         ]
 
+        self._last_usage = None  # сброс перед каждым вызовом
         last_err = None
         for attempt in range(retries):
             try:
@@ -88,6 +89,7 @@ class AzureJSON:
                     messages=messages,
                     response_format={"type": "json_object"},
                 )
+                self._last_usage = resp.usage  # для oracle.py — учёт токенов
                 content = resp.choices[0].message.content
                 return json.loads(content)
             except Exception as e:
