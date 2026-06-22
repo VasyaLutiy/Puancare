@@ -139,47 +139,87 @@ class Agent:
 
 
 # ---------------------------------------------------------------------------
-# Self-test (M3 + M4)
+# Self-test (M3 + M4 + M5)
 # ---------------------------------------------------------------------------
 
 def _selftest() -> None:
     from devops_agent.services import MEM_BUCKETS, _GROUND_TRUTH
 
-    print("=== Agent self-test (M3: рождение правила / M4: перенос) ===\n")
+    print("=== Agent self-test (M3 / M4 / M5) ===\n")
     errors = []
 
     world = World()
-    # Один BIOS на оба эпизода — правила накапливаются между ними (M4)
-    bios  = BiosState.initial(["svc_a", "svc_d"])
+    # Один BIOS на все эпизоды — правила накапливаются между ними
+    bios  = BiosState.initial(["svc_a", "svc_b", "svc_c", "svc_d"])
     agent = Agent(world, bios, verbose=True)
 
     # --- M3: svc_a — учимся с нуля ---
     print("=== Эпизод 1: svc_a (учимся с нуля) ===")
     r_a = agent.run_episode("svc_a")
 
-    min_safe_a = _GROUND_TRUTH["svc_a"]["min_safe_bucket"]
-    unsafe_expected_a = {("heavy", b) for b in MEM_BUCKETS if b < min_safe_a}
-
-    if not r_a.success:
-        errors.append(f"svc_a: ожидали success, got {r_a.error!r}")
-    if bios.unsafe_mem != unsafe_expected_a:
-        errors.append(f"svc_a: unsafe_mem={sorted(bios.unsafe_mem)}, ожидали {sorted(unsafe_expected_a)}")
-
-    # --- M4: svc_d — бесплатный перенос ---
-    print("\n=== Эпизод 2: svc_d (бесплатный перенос) ===")
+    # --- M4: svc_d — бесплатный перенос (heavy → safe@512) ---
+    print("\n=== Эпизод 2: svc_d (бесплатный перенос, heavy→512) ===")
     r_d = agent.run_episode("svc_d")
 
-    print(f"\n--- итог ---")
-    print(f"svc_a: success={r_a.success}, trials={r_a.n_trials}, learned={r_a.n_learned}")
-    print(f"svc_d: success={r_d.success}, trials={r_d.n_trials}, learned={r_d.n_learned}")
-    print(f"unsafe_mem (общий): {sorted(bios.unsafe_mem)}")
+    # --- M5: svc_b — независимый класс light → safe@128 ---
+    print("\n=== Эпизод 3: svc_b (light → safe@128) ===")
+    r_b = agent.run_episode("svc_b")
 
-    if not r_d.success:
-        errors.append(f"svc_d: ожидали success, got {r_d.error!r}")
+    # --- M5: svc_c — независимый класс extreme → safe@1024 ---
+    print("\n=== Эпизод 4: svc_c (extreme → safe@1024) ===")
+    r_c = agent.run_episode("svc_c")
+
+    # --- Сводка по классам ---
+    print("\n" + "=" * 50)
+    print("СВОДКА (trials / learned / success)")
+    print("=" * 50)
+    rows = [
+        ("svc_a", "heavy",   r_a),
+        ("svc_d", "heavy",   r_d),
+        ("svc_b", "light",   r_b),
+        ("svc_c", "extreme", r_c),
+    ]
+    for name, wc, r in rows:
+        print(f"  {name:6s} [{wc:7s}]  trials={r.n_trials}  learned={r.n_learned}  ok={r.success}")
+
+    # Ожидаемые правила по классу (из ground truth)
+    expected_unsafe: set[tuple[str, int]] = set()
+    for name, truth in _GROUND_TRUTH.items():
+        wc  = bios.services[name]["workload_class"]
+        for b in MEM_BUCKETS:
+            if b < truth["min_safe_bucket"]:
+                expected_unsafe.add((wc, b))
+
+    print(f"\nunsafe_mem итого: {sorted(bios.unsafe_mem)}")
+
+    # --- Проверки ---
+    for name, _, r in rows:
+        if not r.success:
+            errors.append(f"{name}: ожидали success, got {r.error!r}")
+
+    # M4: svc_d — перенос за 1 пробу
     if r_d.n_trials != 1:
-        errors.append(f"svc_d: ожидали 1 пробу (перенос), got {r_d.n_trials}")
-    if r_d.n_learned != 0:
-        errors.append(f"svc_d: ожидали 0 новых правил, got {r_d.n_learned}")
+        errors.append(f"svc_d: ожидали 1 пробу (transfer), got {r_d.n_trials}")
+
+    # M5: svc_b — только light-правила, нет кросс-загрязнения
+    light_rules = {(wc, b) for (wc, b) in bios.unsafe_mem if wc == "light"}
+    heavy_rules = {(wc, b) for (wc, b) in bios.unsafe_mem if wc == "heavy"}
+    extreme_rules = {(wc, b) for (wc, b) in bios.unsafe_mem if wc == "extreme"}
+
+    if light_rules & heavy_rules:
+        errors.append(f"Кросс-загрязнение light↔heavy: {light_rules & heavy_rules}")
+    if light_rules & extreme_rules:
+        errors.append(f"Кросс-загрязнение light↔extreme: {light_rules & extreme_rules}")
+    if heavy_rules & extreme_rules:
+        errors.append(f"Кросс-загрязнение heavy↔extreme: {heavy_rules & extreme_rules}")
+
+    # Полное совпадение с ground truth
+    if bios.unsafe_mem != expected_unsafe:
+        errors.append(
+            f"unsafe_mem не совпадает с ground truth:\n"
+            f"  got:      {sorted(bios.unsafe_mem)}\n"
+            f"  expected: {sorted(expected_unsafe)}"
+        )
 
     print()
     if errors:
@@ -188,7 +228,7 @@ def _selftest() -> None:
             print(f"  {e}")
         sys.exit(1)
     else:
-        print("M3 + M4 OK. Рождение правила и бесплатный перенос подтверждены.")
+        print("M3 + M4 + M5 OK. Партиции чистые, кросс-загрязнения нет.")
 
 
 if __name__ == "__main__":
