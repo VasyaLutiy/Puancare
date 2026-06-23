@@ -1,5 +1,5 @@
 (define (domain devops)
-  (:requirements :strips :typing :negative-preconditions :action-costs)
+  (:requirements :strips :typing :negative-preconditions)
 
   (:types service configopt - object)
 
@@ -9,15 +9,10 @@
     (config_set ?s - service ?o - configopt)
     (config_ok  ?s - service ?o - configopt))
 
-  (:functions
-    (mem_cost ?s - service) - number
-    (total-cost) - number)
-
   (:action set_mem
     :parameters (?s - service)
     :precondition (not (mem_ok ?s))
-    :effect (and (mem_ok ?s)
-                 (increase (total-cost) (mem_cost ?s))))
+    :effect (mem_ok ?s))
 
   (:action set_config
     :parameters (?s - service ?o - configopt)

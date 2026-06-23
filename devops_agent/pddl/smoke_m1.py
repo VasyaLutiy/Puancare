@@ -1,13 +1,12 @@
 """
-M1 DoD smoke test.
+M1 DoD smoke test (после #8: STRIPS, без cost/metric).
 
 Проверяет:
-  1. ProblemBuilder генерирует валидный problem.pddl из BiosState.
-  2. PDDLReader парсит domain.pddl + problem.pddl без ошибок.
-  3. Повторный парсинг того же файла даёт ту же проблему (round-trip).
-  4. План известного порога = 3 шага:
-       set_config(svc_e, good) → set_mem(svc_e) → deploy(svc_e, good)
-     статус SOLVED_OPTIMALLY.
+  1. ProblemBuilder генерирует валидный problem.pddl без cost-фактов.
+  2. PDDLReader парсит domain + problem без ошибок.
+  3. planner.supports(p.kind) == True (no UserWarning).
+  4. Round-trip парсинга идентичен.
+  5. План = 3 шага, статус SOLVED_OPTIMALLY.
 """
 
 import os
@@ -27,10 +26,10 @@ get_environment().credits_stream = None
 PDDL_DIR = os.path.dirname(os.path.abspath(__file__))
 DOMAIN = os.path.join(PDDL_DIR, "domain.pddl")
 
-print("=== M1 DoD Smoke Test ===\n")
+print("=== M1 DoD Smoke Test (STRIPS, #8) ===\n")
 errors = []
 
-# BiosState с известным порогом: svc_e, small buckets unsafe → safe=[512], bad_config={bad}
+# BiosState: svc_e, small buckets unsafe → safe=[512], bad_config={bad}
 bios = BiosState.initial(["svc_e"])
 for bad_bucket in [64, 128, 256]:
     bios.mark_unsafe("standard", bad_bucket)
@@ -42,12 +41,12 @@ problem_path = pb.build("svc_e")
 
 with open(problem_path) as f:
     content = f.read()
-print(f"    Wrote: {problem_path}")
 print(f"    Content:\n{content}")
 
-# Ожидаем: mem_cost svc_e = 512, config_ok svc_e good (не bad)
-if "(= (mem_cost svc_e) 512)" not in content:
-    errors.append("problem.pddl: ожидали (= (mem_cost svc_e) 512)")
+# Нет cost-артефактов
+for forbidden in ["mem_cost", "total-cost", ":metric", ":functions"]:
+    if forbidden in content:
+        errors.append(f"problem.pddl содержит запрещённый артефакт: {forbidden!r}")
 if "(config_ok svc_e good)" not in content:
     errors.append("problem.pddl: ожидали (config_ok svc_e good)")
 if "(config_ok svc_e bad)" in content:
@@ -55,38 +54,40 @@ if "(config_ok svc_e bad)" in content:
 
 print("[2] PDDLReader парсит domain + problem ...")
 p = PDDLReader().parse_problem(DOMAIN, problem_path)
-print(f"    Kind features: {sorted(str(p.kind).split(chr(10)))}")
+print(f"    Kind: {sorted(str(p.kind).split(chr(10)))}")
 
-print("\n[3] Round-trip: повторный парсинг того же файла ...")
-p2 = PDDLReader().parse_problem(DOMAIN, problem_path)
-if str(p) != str(p2):
-    errors.append("Round-trip: повторный парсинг дал другую проблему")
-else:
-    print("    → идентично ✓")
-
-print("\n[4] FD-opt: SOLVED_OPTIMALLY + 3 шага ...")
+print("\n[3] supports(p.kind) ...")
 with OneshotPlanner(name="fast-downward-opt") as planner:
+    supported = planner.supports(p.kind)
+    print(f"    supports = {supported}")
+    if not supported:
+        errors.append("planner.supports(p.kind) == False")
+
+    print("\n[4] Round-trip ...")
+    p2 = PDDLReader().parse_problem(DOMAIN, problem_path)
+    if str(p) != str(p2):
+        errors.append("Round-trip: повторный парсинг дал другую проблему")
+    else:
+        print("    → идентично ✓")
+
+    print("\n[5] FD-opt: SOLVED_OPTIMALLY + 3 шага ...")
     result = planner.solve(p)
 
 steps = [str(a) for a in result.plan.actions] if result.plan else []
 print(f"    Status : {result.status}")
 print(f"    Plan   : {steps}")
 
-if result.status != PlanGenerationResultStatus.SOLVED_OPTIMALLY:
-    errors.append(f"Status: ожидали SOLVED_OPTIMALLY, got {result.status}")
+_OK = {PlanGenerationResultStatus.SOLVED_OPTIMALLY, PlanGenerationResultStatus.SOLVED_SATISFICING}
+if result.status not in _OK:
+    errors.append(f"Status: ожидали SOLVED_OPTIMALLY/SATISFICING, got {result.status}")
 if len(steps) != 3:
     errors.append(f"Plan length: ожидали 3, got {len(steps)}: {steps}")
 else:
-    # set_config и set_mem независимы → порядок между ними не фиксирован доменом.
-    # Проверяем наличие обоих + deploy последним.
-    has_set_config = any(s.startswith("set_config") and "good" in s for s in steps)
-    has_set_mem = any(s.startswith("set_mem") for s in steps)
-    last_is_deploy = steps[-1].startswith("deploy") and "good" in steps[-1]
-    if not has_set_config:
-        errors.append(f"Plan: нет set_config(... good ...): {steps}")
-    if not has_set_mem:
+    if not any(s.startswith("set_config") and "good" in s for s in steps):
+        errors.append(f"Plan: нет set_config(...good...): {steps}")
+    if not any(s.startswith("set_mem") for s in steps):
         errors.append(f"Plan: нет set_mem: {steps}")
-    if not last_is_deploy:
+    if not (steps[-1].startswith("deploy") and "good" in steps[-1]):
         errors.append(f"Plan: последний шаг не deploy(...good...): {steps[-1]!r}")
 
 print()

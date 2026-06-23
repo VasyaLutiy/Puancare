@@ -134,7 +134,10 @@ def plan(bios: BiosState, goal_service: str) -> list[str] | None:
     with OneshotPlanner(name="fast-downward-opt") as planner:
         result = planner.solve(p)
 
-    if result.status == PlanGenerationResultStatus.SOLVED_OPTIMALLY:
+    if result.status in (
+        PlanGenerationResultStatus.SOLVED_OPTIMALLY,
+        PlanGenerationResultStatus.SOLVED_SATISFICING,
+    ):
         return [str(a) for a in result.plan.actions]
     return None
 

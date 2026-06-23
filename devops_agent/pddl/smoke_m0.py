@@ -1,3 +1,7 @@
+"""
+M0 smoke — проверяет что домен парсится и FD находит план.
+После #8 домен чистый STRIPS: никаких numeric-fluents/action-costs.
+"""
 import os
 import sys
 
@@ -6,33 +10,33 @@ domain_path = os.path.join(script_dir, "domain.pddl")
 problem_path = os.path.join(script_dir, "problem.pddl")
 
 from unified_planning.io import PDDLReader
-from unified_planning.shortcuts import OneshotPlanner
+from unified_planning.shortcuts import OneshotPlanner, get_environment
 from unified_planning.engines import PlanGenerationResultStatus
 
-print("=== M0 Smoke Test (v2): Numeric PDDL — FD-opt ===\n")
+get_environment().credits_stream = None
+
+print("=== M0 Smoke Test: STRIPS domain ===\n")
 
 print("[1] Parsing domain + problem...")
-reader = PDDLReader()
-p = reader.parse_problem(domain_path, problem_path)
-print(f"    Problem kind features:")
-for f in sorted(str(p.kind).split("\n")):
-    if f.strip():
-        print(f"      {f.strip()}")
-print()
+p = PDDLReader().parse_problem(domain_path, problem_path)
+print(f"    Kind features: {sorted(str(p.kind).split(chr(10)))}\n")
 
-print("[2] Solving SOLVED_OPTIMALLY (fast-downward-opt)...")
+print("[2] fast-downward-opt supports() check...")
 with OneshotPlanner(name="fast-downward-opt") as planner:
-    engine_name = planner.name
-    print(f"    Engine selected: {engine_name}")
+    supported = planner.supports(p.kind)
+    print(f"    supports(p.kind) = {supported}")
+    if not supported:
+        print("=== DoD: FAIL — supports()==False ===")
+        sys.exit(1)
     r = planner.solve(p)
 
 print(f"\n[3] Result:")
 print(f"    Status : {r.status}")
-print(f"    Engine : {engine_name}")
 print(f"    Plan   : {r.plan}")
 
-if r.status == PlanGenerationResultStatus.SOLVED_OPTIMALLY:
-    print("\n=== DoD: PASS — SOLVED_OPTIMALLY ===")
+_OK = {PlanGenerationResultStatus.SOLVED_OPTIMALLY, PlanGenerationResultStatus.SOLVED_SATISFICING}
+if r.status in _OK:
+    print(f"\n=== DoD: PASS — {r.status.name}, supports()==True ===")
     sys.exit(0)
 else:
     print(f"\n=== DoD: FAIL — got {r.status} ===")
