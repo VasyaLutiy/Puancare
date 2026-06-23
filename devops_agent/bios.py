@@ -3,16 +3,18 @@ BIOS-state: читаемая/редактируемая модель мира.
 
 Поля:
   services         — наблюдаемые фичи сервисов (agent_view)
-  buckets          — доступные бакеты памяти [MiB], по возрастанию
-  unsafe_mem       — класс-правила: {(workload_class, bucket_mib)}
-  unsafe_svc       — per-service исключения: {(svc_name, bucket_mib)}
-  known_safe_class — (wc, bucket) подтверждены реальным running
+  mem_threshold    — {workload_class: working_mib} выученные пороги по классу
+  mem_threshold_svc — {svc_name: working_mib} per-service исключения (карвинг)
+  incumbent_config — {svc_name: current applied config}
   bad_config       — {(svc_name, config_opt)} плохих конфигов
   reverse_index    — симптом → [причина, ...] (амортизация LLM-оракула)
 
+Константы:
+  MEM_BASE    — начальный размер удвоения [MiB]
+  MEM_CEILING — жёсткий потолок [MiB]; агент возвращает no_plan при превышении
+
 plan(bios, goal_service) → list[str] | None
-  Строит problem.pddl из BIOS, решает через FD-opt.
-  Статус SOLVED_OPTIMALLY.
+  Проверяет достижимость по config через FD; память — за агентом.
 """
 
 import os
@@ -23,11 +25,14 @@ from unified_planning.engines import PlanGenerationResultStatus
 from unified_planning.io import PDDLReader
 from unified_planning.shortcuts import OneshotPlanner, get_environment
 
-from devops_agent.services import MEM_BUCKETS, agent_view, all_service_names
+from devops_agent.services import agent_view, all_service_names
 
 get_environment().credits_stream = None
 
 _PDDL_DIR = os.path.join(os.path.dirname(__file__), "pddl")
+
+MEM_BASE: int = 64       # MiB, стартовый размер удвоения
+MEM_CEILING: int = 16384  # MiB (16 GiB), жёсткий потолок
 
 
 # ---------------------------------------------------------------------------
@@ -39,13 +44,11 @@ class BiosState:
     """
     Один экземпляр живёт на весь сеанс — знания накапливаются между эпизодами.
     """
-    services: dict[str, dict]                         # {svc_name: agent_view(svc_name)}
-    buckets: list[int]                                # MEM_BUCKETS по возрастанию
-    unsafe_mem: set[tuple[str, int]]                 # {(wc, bucket)} — класс-правила
-    unsafe_svc: set[tuple[str, int]]                 # {(svc_name, bucket)} — per-service
-    known_safe_class: set[tuple[str, int]]           # {(wc, bucket)} confirmed running
-    bad_config: set[tuple[str, str]]                 # {(svc_name, config_opt)}
-    incumbent_config: dict[str, str]                 # {svc_name: current applied config}
+    services: dict[str, dict]                # {svc_name: agent_view(svc_name)}
+    mem_threshold: dict[str, int]            # {workload_class: working_mib}
+    mem_threshold_svc: dict[str, int]        # {svc_name: working_mib} карвинг-исключения
+    incumbent_config: dict[str, str]         # {svc_name: current applied config}
+    bad_config: set[tuple[str, str]]         # {(svc_name, config_opt)}
     reverse_index: dict[str, list[str]] = field(default_factory=dict)
 
     @classmethod
@@ -53,45 +56,33 @@ class BiosState:
         svcs = {n: agent_view(n) for n in svc_names}
         return cls(
             services=svcs,
-            buckets=sorted(MEM_BUCKETS),
-            unsafe_mem=set(),
-            unsafe_svc=set(),
-            known_safe_class=set(),
-            bad_config=set(),
+            mem_threshold={},
+            mem_threshold_svc={},
             incumbent_config={
                 n: svcs[n]["current_config"]
                 for n in svc_names
                 if "current_config" in svcs[n]
             },
+            bad_config=set(),
         )
-
-    def mark_unsafe(self, workload_class: str, bucket_mib: int) -> None:
-        self.unsafe_mem.add((workload_class, bucket_mib))
-
-    def mark_unsafe_svc(self, svc_name: str, bucket_mib: int) -> None:
-        self.unsafe_svc.add((svc_name, bucket_mib))
 
     def mark_bad_config(self, svc_name: str, config_opt: str) -> None:
         self.bad_config.add((svc_name, config_opt))
 
-    def confirm_safe(self, workload_class: str, bucket_mib: int) -> None:
-        self.known_safe_class.add((workload_class, bucket_mib))
-
-    def is_class_confirmed_safe(self, workload_class: str, bucket_mib: int) -> bool:
-        return (workload_class, bucket_mib) in self.known_safe_class
-
-    def is_unsafe_for_deploy(self, svc_name: str, bucket_mib: int) -> bool:
-        wc = self.services[svc_name]["workload_class"]
-        return (
-            (wc, bucket_mib) in self.unsafe_mem
-            or (svc_name, bucket_mib) in self.unsafe_svc
-        )
-
     def is_bad_config(self, svc_name: str, config_opt: str) -> bool:
         return (svc_name, config_opt) in self.bad_config
 
-    def safe_buckets_for(self, svc_name: str) -> list[int]:
-        return [b for b in self.buckets if not self.is_unsafe_for_deploy(svc_name, b)]
+    def _choose_mem(self, svc: str) -> int | None:
+        """
+        Возвращает лучший известный порог памяти (per-svc > class) или None.
+        None означает: нет знаний, агент начинает с MEM_BASE.
+        """
+        if svc in self.mem_threshold_svc:
+            return self.mem_threshold_svc[svc]
+        wc = self.services[svc]["workload_class"]
+        if wc in self.mem_threshold:
+            return self.mem_threshold[wc]
+        return None
 
     def _choose_config(self, svc: str) -> str | None:
         """
@@ -101,25 +92,25 @@ class BiosState:
         """
         opts = self.services[svc].get("config_options")
         if not opts:
-            return "cfg_default"                        # сервис без config → always-on dummy
+            return "cfg_default"
         inc = self.incumbent_config.get(svc)
         if inc is not None and not self.is_bad_config(svc, inc):
-            return inc                                  # действуем по наследству
-        for o in sorted(opts):                          # детерминированная альтернатива
+            return inc
+        for o in sorted(opts):
             if not self.is_bad_config(svc, o):
                 return o
-        return None                                     # все known-bad → нет валидного config
+        return None
 
 
 # ---------------------------------------------------------------------------
-# Planner (BIOS → problem.pddl → FD-opt)
+# Planner (config-feasibility check via PDDL)
 # ---------------------------------------------------------------------------
 
 def plan(bios: BiosState, goal_service: str) -> list[str] | None:
     """
-    Возвращает оптимальный план или None.
-    Пример с config: ['set_config(svc_e, good)', 'set_mem(svc_e)', 'deploy(svc_e, good)']
-    Пример без config: ['set_config(svc_a, cfg_default)', 'set_mem(svc_a)', 'deploy(svc_a, cfg_default)']
+    Проверяет config-достижимость через FD.
+    Возвращает шаги плана или None (нет валидного конфига).
+    Память — за агентом (не проверяется здесь).
     """
     from devops_agent.pddl.problem_builder import ProblemBuilder
 
@@ -147,46 +138,46 @@ def plan(bios: BiosState, goal_service: str) -> list[str] | None:
 # ---------------------------------------------------------------------------
 
 def _selftest() -> None:
-    print("=== BIOS self-test (M1: PDDL domain) ===\n")
+    print("=== BIOS self-test (M3: doubling + thresholds) ===\n")
     errors = []
 
-    # 1. Без config: план = [set_config(svc_a, cfg_default), set_mem(svc_a), deploy(svc_a, cfg_default)]
+    # 1. Без config: план есть
     bios1 = BiosState.initial(["svc_a"])
     steps1 = plan(bios1, "svc_a")
     print(f"Test 1 (svc_a, no config): {steps1}")
     if steps1 is None or len(steps1) != 3:
         errors.append(f"Test1: expected 3-step plan, got {steps1}")
-    elif not any("set_config" in s for s in steps1):
-        errors.append(f"Test1: no set_config in plan: {steps1}")
-    elif not any("set_mem" in s for s in steps1):
-        errors.append(f"Test1: no set_mem in plan: {steps1}")
     else:
         print("  → OK ✓")
 
-    # 2. С config (naive): план = [set_config(svc_e, ?), set_mem(svc_e), deploy(svc_e, ?)]
+    # 2. С config (naive): план есть
     bios2 = BiosState.initial(["svc_e"])
     steps2 = plan(bios2, "svc_e")
     print(f"\nTest 2 (svc_e naive): {steps2}")
     if steps2 is None or len(steps2) != 3:
         errors.append(f"Test2: expected 3-step plan, got {steps2}")
-    elif not any("set_config" in s for s in steps2):
-        errors.append(f"Test2: no set_config in plan: {steps2}")
     else:
         print("  → OK ✓")
 
-    # 3. Известный порог: bad_config=(svc_e,bad), unsafe=[64,128,256] → good + 512
+    # 3. Все конфиги плохи → plan=None
     bios3 = BiosState.initial(["svc_e"])
-    for bad in [64, 128, 256]:
-        bios3.mark_unsafe("standard", bad)
     bios3.mark_bad_config("svc_e", "bad")
+    bios3.mark_bad_config("svc_e", "good")
     steps3 = plan(bios3, "svc_e")
-    print(f"\nTest 3 (known threshold, bad_config={{svc_e,bad}}): {steps3}")
-    if steps3 is None or len(steps3) != 3:
-        errors.append(f"Test3: expected 3-step plan, got {steps3}")
-    elif not any("good" in s for s in steps3):
-        errors.append(f"Test3: expected 'good' config, got {steps3}")
+    print(f"\nTest 3 (all configs bad): {steps3}")
+    if steps3 is not None:
+        errors.append(f"Test3: expected None, got {steps3}")
     else:
         print("  → OK ✓")
+
+    # 4. _choose_mem: no knowledge → None
+    bios4 = BiosState.initial(["svc_e"])
+    assert bios4._choose_mem("svc_e") is None, "_choose_mem should be None fresh"
+    bios4.mem_threshold["standard"] = 512
+    assert bios4._choose_mem("svc_e") == 512, "_choose_mem class threshold"
+    bios4.mem_threshold_svc["svc_e"] = 1024
+    assert bios4._choose_mem("svc_e") == 1024, "_choose_mem svc exception"
+    print("\nTest 4 (_choose_mem): OK ✓")
 
     print()
     if errors:
@@ -195,7 +186,7 @@ def _selftest() -> None:
             print(f"  {e}")
         sys.exit(1)
     else:
-        print("All tests passed. BIOS PDDL plan: OK.")
+        print("All tests passed. BIOS M3: OK.")
 
 
 if __name__ == "__main__":

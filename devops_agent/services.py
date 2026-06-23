@@ -84,16 +84,24 @@ _SERVICES = {
         "current_config": "bad",            # наблюдаемое наследство (агент видит, что плохой)
         "cmd": ["python", "-c", _alloc_and_config_cmd(350)],
     },
+    "svc_f": {
+        "image": _IMAGE,
+        "workload_class": "xlarge",
+        # footprint ~1100 MiB → OOM при ≤1024 MiB, safe при ≥2048 MiB
+        # Anti-hardcode DoD: заводится только удвоением без правок кода
+        "cmd": ["python", "-c", _alloc_cmd(1100)],
+    },
 }
 
 # Истина: минимальный безопасный бакет (и config для svc_e).
 # Агент должен это ВЫУЧИТЬ через пробы, не получить готовым.
 _GROUND_TRUTH = {
-    "svc_a": {"footprint_mib": 350, "min_safe_bucket": 512},
-    "svc_b": {"footprint_mib": 65,  "min_safe_bucket": 128},
-    "svc_c": {"footprint_mib": 800, "min_safe_bucket": 1024},
-    "svc_d": {"footprint_mib": 380, "min_safe_bucket": 512},
-    "svc_e": {"footprint_mib": 350, "min_safe_bucket": 512, "good_config": "good"},
+    "svc_a": {"footprint_mib": 350,  "min_safe_bucket": 512},
+    "svc_b": {"footprint_mib": 65,   "min_safe_bucket": 128},
+    "svc_c": {"footprint_mib": 800,  "min_safe_bucket": 1024},
+    "svc_d": {"footprint_mib": 380,  "min_safe_bucket": 512},
+    "svc_e": {"footprint_mib": 350,  "min_safe_bucket": 512, "good_config": "good"},
+    "svc_f": {"footprint_mib": 1100, "min_safe_bucket": 2048},
 }
 
 

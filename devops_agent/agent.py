@@ -1,23 +1,25 @@
 """
-agent.py — петля агента (M3–M6).
+agent.py — петля агента (M3–M6+#7).
 
-Цикл: plan → predict → act → compare → diagnose → learn → replan.
+Цикл: _choose_mem → _choose_config → act → observe → learn → повторить.
 
-M6 добавляет:
-  - второй симптом: "unhealthy" (плохой config)
-  - reverse_index: symptom → [cause, ...] — строится опытом, не засевается
-  - oracle: вызывается ТОЛЬКО когда reverse_index пуст (cost-gated)
-  - _bump_reverse: каждый успешный фикс поднимает причину на первое место
+Memory: удвоение от MEM_BASE до running (правило, не список).
+  oom_killed → current_mem *= 2. Потолок MEM_CEILING → no_plan.
+  Запись:
+    fresh (нет class threshold) → mem_threshold[wc]
+    carving (class threshold не сработал) → mem_threshold_svc[svc]
+    transfer (class threshold сразу) → без изменений
 
-Default causes (без oracle, для очевидных симптомов):
-  oom_killed → memory (очевидно, не требует LLM)
-  unhealthy  → config (используется как fallback если oracle=None)
+Config: наследство через _choose_config → incumbent.
+  unhealthy → mark_bad_config → выбрать следующий config, НЕ менять mem.
+
+Oracle: вызывается только при плоском приоре (reverse_index пуст).
 """
 
 import sys
 from dataclasses import dataclass, field
 
-from devops_agent.bios import BiosState, plan
+from devops_agent.bios import BiosState, MEM_BASE, MEM_CEILING
 from devops_agent.model.ontology import WorldModel as _WorldModel
 from devops_agent.world import Obs, World
 
@@ -31,7 +33,7 @@ _wm = _WorldModel.load()
 @dataclass
 class Trial:
     """Одна попытка внутри эпизода."""
-    bucket: int
+    bucket: int       # mem_mib в этой попытке
     config: str
     obs: Obs
     learned: bool
@@ -40,7 +42,7 @@ class Trial:
     def __str__(self) -> str:
         tag = "learned" if self.learned else ("ok" if self.obs.phase == "running" else "error")
         o = " [oracle]" if self.oracle_used else ""
-        return f"Trial(bucket={self.bucket}, config={self.config!r}, phase={self.obs.phase!r}, {tag}{o})"
+        return f"Trial(mem={self.bucket}m, config={self.config!r}, phase={self.obs.phase!r}, {tag}{o})"
 
 
 @dataclass
@@ -64,10 +66,7 @@ class EpisodeResult:
 # Вспомогательные функции
 # ---------------------------------------------------------------------------
 
-
-
 def _bump_reverse(reverse_index: dict[str, list[str]], symptom: str, cause: str) -> None:
-    """Поднять cause на первое место в reverse_index[symptom]."""
     causes = reverse_index.setdefault(symptom, [])
     if cause in causes:
         causes.remove(cause)
@@ -95,74 +94,96 @@ class Agent:
 
     def run_episode(self, svc_name: str) -> EpisodeResult:
         """
-        Запускает петлю для одного сервиса до успеха или исчерпания бакетов.
+        Запускает петлю удвоения для одного сервиса до running или потолка.
         """
         if svc_name not in self.bios.services:
             raise ValueError(f"Unknown service: {svc_name!r}")
 
         wc = self.bios.services[svc_name]["workload_class"]
         trials: list[Trial] = []
-        episode_oracle_calls = 0
+        oracle_calls = 0
         last_symptom: str | None = None
         last_cause: str | None = None
 
-        self._log(f"\n[episode] {svc_name} (workload_class={wc!r})")
+        # --- Начальное состояние памяти ---
+        has_class_threshold = wc in self.bios.mem_threshold
+        has_svc_threshold = svc_name in self.bios.mem_threshold_svc
+        current_mem = self.bios._choose_mem(svc_name) or MEM_BASE
+        # carving: True если начали с class threshold и уже получили OOM,
+        # или если есть svc-исключение (обновляем его при OOM)
+        carving = has_svc_threshold
+
+        self._log(f"\n[episode] {svc_name} (wc={wc!r}, mem_start={current_mem}m, "
+                  f"carving={carving})")
 
         while True:
-            # 1. Plan
-            steps = plan(self.bios, svc_name)
-            if steps is None:
-                self._log("  [no plan] все бакеты/конфиги заблокированы")
+            # --- Потолок ---
+            if current_mem > MEM_CEILING:
+                self._log(f"  [ceiling] {current_mem}m > {MEM_CEILING}m → no_plan")
                 return EpisodeResult(
                     svc_name=svc_name, success=False,
-                    trials=trials, oracle_calls=episode_oracle_calls,
+                    trials=trials, oracle_calls=oracle_calls,
                     error="no_plan",
                 )
 
-            bucket = self.bios.safe_buckets_for(svc_name)[0]
+            # --- Config feasibility ---
             config = self.bios._choose_config(svc_name)
-            self._log(f"  plan: {steps}")
+            if config is None:
+                self._log("  [no config] все конфиги заблокированы → no_plan")
+                return EpisodeResult(
+                    svc_name=svc_name, success=False,
+                    trials=trials, oracle_calls=oracle_calls,
+                    error="no_plan",
+                )
 
-            # 2. Act
-            obs = self.world.apply({"service": svc_name, "mem_bucket": bucket, "config": config})
+            self._log(f"  try: mem={current_mem}m config={config!r}")
+
+            # --- Act ---
+            obs = self.world.apply({
+                "service": svc_name,
+                "mem_bucket": current_mem,
+                "config": config,
+            })
             self._log(f"  obs:  {obs}")
 
-            # 3. Compare: predict=running
+            # --- Success ---
             if obs.phase == "running":
-                # Успех: подтвердить class-safe, зафиксировать incumbent, поднять причину
-                self.bios.confirm_safe(wc, bucket)
+                # Запись порога памяти
+                if carving:
+                    self.bios.mem_threshold_svc[svc_name] = current_mem
+                elif not has_class_threshold:
+                    # Свежее обучение → запись class threshold
+                    self.bios.mem_threshold[wc] = current_mem
+                # else: transfer сработал → без изменений
+
                 self.bios.incumbent_config[svc_name] = config
                 if last_symptom and last_cause:
                     _bump_reverse(self.bios.reverse_index, last_symptom, last_cause)
-                trials.append(Trial(bucket=bucket, config=config, obs=obs, learned=False))
+                trials.append(Trial(bucket=current_mem, config=config, obs=obs, learned=False))
                 self._log(
-                    f"  ✓ running @ {bucket} MiB config={config!r} "
+                    f"  ✓ running @ {current_mem}m config={config!r} "
                     f"— эпизод завершён за {len(trials)} проб(ы)"
                 )
                 return EpisodeResult(
                     svc_name=svc_name, success=True,
-                    trials=trials, oracle_calls=episode_oracle_calls,
+                    trials=trials, oracle_calls=oracle_calls,
                 )
 
-            # 4. Execution gap — классифицируем симптом
+            # --- Execution gap: classify + diagnose ---
             symptom = _wm.classify(obs)
-
-            # 5. Diagnostic routing
             oracle_used = False
             suspects = self.bios.reverse_index.get(symptom, [])
             if suspects:
                 cause = suspects[0]
             elif _wm.obvious_cause(symptom) is not None:
-                # Очевидная причина — оракул не нужен даже если доступен
                 cause = _wm.obvious_cause(symptom)
             elif self.oracle is not None:
-                # Cost-gated: LLM только на плоском приоре неочевидного симптома
                 ctx = {"service": svc_name, "workload_class": wc,
-                       "mem_bucket": bucket, "config": config}
+                       "mem_bucket": current_mem, "config": config}
                 causes = self.oracle.suggest_causes(symptom, ctx)
                 cause = causes[0]
                 self.bios.reverse_index[symptom] = [cause]
-                episode_oracle_calls += 1
+                oracle_calls += 1
                 oracle_used = True
                 self._log(
                     f"  oracle: {symptom!r} → {causes} "
@@ -174,40 +195,33 @@ class Agent:
 
             last_symptom = symptom
             last_cause = cause
-            trials.append(Trial(bucket=bucket, config=config, obs=obs,
+            trials.append(Trial(bucket=current_mem, config=config, obs=obs,
                                 learned=True, oracle_used=oracle_used))
 
-            # 6. Apply fix (диспетчер по repair_kind из онтологии)
+            # --- Apply fix ---
             rk = _wm.repair_kind(cause)
             if rk == "mem_threshold":
-                if self.bios.is_class_confirmed_safe(wc, bucket):
-                    self.bios.mark_unsafe_svc(svc_name, bucket)
-                    self._log(
-                        f"  carving: {wc}@{bucket} safe→exception ({svc_name},{bucket})"
-                    )
-                else:
-                    self.bios.mark_unsafe(wc, bucket)
-                    self._log(
-                        f"  gap: OOM@{bucket}→unsafe-mem({wc},{bucket})"
-                    )
+                # Память: удвоить
+                if not carving and has_class_threshold:
+                    # Первый OOM на class threshold → начинаем carving
+                    carving = True
+                current_mem *= 2
+                self._log(f"  gap: OOM → mem*2={current_mem}m")
             elif rk == "bad_config":
+                # Конфиг: заблокировать и повторить с тем же mem
                 self.bios.mark_bad_config(svc_name, config)
                 self._log(
-                    f"  gap: unhealthy@config={config!r}→bad_config({svc_name},{config!r})"
+                    f"  gap: unhealthy@config={config!r} → bad_config({svc_name},{config!r})"
                 )
             else:
                 self._log(f"  unknown repair kind for cause {cause!r}, skipping fix")
-
-            # 7. Unexpected (не OOM, не unhealthy)
-            if obs.phase == "error":
-                return EpisodeResult(
-                    svc_name=svc_name, success=False,
-                    trials=trials, oracle_calls=episode_oracle_calls,
-                    error=f"unexpected_obs:{obs.phase}",
-                )
-
-            # 8. Replan
-            continue
+                # Неожиданное состояние — прерываем
+                if obs.phase == "error":
+                    return EpisodeResult(
+                        svc_name=svc_name, success=False,
+                        trials=trials, oracle_calls=oracle_calls,
+                        error=f"unexpected_obs:{obs.phase}",
+                    )
 
 
 # ---------------------------------------------------------------------------
@@ -215,32 +229,37 @@ class Agent:
 # ---------------------------------------------------------------------------
 
 def _selftest() -> None:
-    from devops_agent.services import MEM_BUCKETS, _GROUND_TRUTH
+    from devops_agent.services import _GROUND_TRUTH
 
     print("=== Agent self-test (M3 / M4 / M5 / M5b / M6) ===\n")
     errors = []
 
     world = World()
-    # M3-M5b: без oracle (дефолтные причины)
-    bios_m5 = BiosState.initial(["svc_a", "svc_b", "svc_c", "svc_d"])
+    bios_m5 = BiosState.initial(["svc_a", "svc_b", "svc_c", "svc_d", "svc_f"])
     agent_m5 = Agent(world, bios_m5, oracle=None, verbose=True)
 
-    print("=== Эпизод 1: svc_a (heavy, учимся с нуля) ===")
+    print("=== Эп 1: svc_a (heavy, учимся с нуля) ===")
     r_a = agent_m5.run_episode("svc_a")
 
-    print("\n=== Эпизод 2: svc_d (heavy, бесплатный перенос) ===")
+    print("\n=== Эп 2: svc_d (heavy, бесплатный перенос) ===")
     r_d = agent_m5.run_episode("svc_d")
 
-    print("\n=== Эпизод 3: svc_b (light, независимый класс) ===")
+    print("\n=== Эп 3: svc_b (light, независимый класс) ===")
     r_b = agent_m5.run_episode("svc_b")
 
-    print("\n=== Эпизод 4: svc_c (heavy, карвинг-исключение) ===")
+    print("\n=== Эп 4: svc_c (heavy, карвинг-исключение) ===")
     r_c = agent_m5.run_episode("svc_c")
 
+    print("\n=== Эп 5: svc_f (xlarge, anti-hardcode: 2048m без правок кода) ===")
+    r_f = agent_m5.run_episode("svc_f")
+
     print(f"\n  reverse_index после M3-M5b: {bios_m5.reverse_index}")
+    print(f"  mem_threshold: {bios_m5.mem_threshold}")
+    print(f"  mem_threshold_svc: {bios_m5.mem_threshold_svc}")
+
     oom_index = bios_m5.reverse_index.get("oom_killed", [])
     if not oom_index or oom_index[0] != "memory":
-        errors.append(f"reverse_index['oom_killed'] после M3-M5b: ожидали ['memory'], got {oom_index}")
+        errors.append(f"reverse_index['oom_killed']: ожидали ['memory'], got {oom_index}")
 
     # --- M6: svc_e с оракулом ---
     try:
@@ -255,74 +274,74 @@ def _selftest() -> None:
         errors.append("M6 пропущен (Oracle недоступен) — skip считается ошибкой")
 
     if oracle_available:
-        # Один BIOS на весь сеанс: переносим накопленные знания из M3-M5b
         bios_m6 = BiosState.initial(["svc_a", "svc_b", "svc_c", "svc_d", "svc_e"])
-        # Переносим знания из bios_m5 (unsafe_mem, known_safe_class, reverse_index)
-        bios_m6.unsafe_mem = set(bios_m5.unsafe_mem)
-        bios_m6.unsafe_svc = set(bios_m5.unsafe_svc)
-        bios_m6.known_safe_class = set(bios_m5.known_safe_class)
+        # Переносим накопленные знания из M3-M5b
+        bios_m6.mem_threshold = dict(bios_m5.mem_threshold)
+        bios_m6.mem_threshold_svc = dict(bios_m5.mem_threshold_svc)
         bios_m6.reverse_index = dict(bios_m5.reverse_index)
         agent_m6 = Agent(world, bios_m6, oracle=oracle, verbose=True)
 
-        print("\n=== Эпизод A: svc_e (первый раз, oracle ожидается 1 вызов) ===")
+        print("\n=== Эп A: svc_e (первый раз, oracle ожидается 1 вызов) ===")
         r_ea = agent_m6.run_episode("svc_e")
 
         tokens_after_a = oracle.total_tokens
         calls_after_a = oracle.n_calls
 
-        print("\n=== Эпизод B: svc_e (повторно, oracle ожидается 0 вызовов) ===")
+        print("\n=== Эп B: svc_e (повторно, oracle ожидается 0 вызовов) ===")
         r_eb = agent_m6.run_episode("svc_e")
 
-        # --- Сводка M6 ---
         print("\n" + "=" * 60)
         print("СВОДКА M6")
         print("=" * 60)
-        print(f"  Эп. A svc_e: success={r_ea.success}, trials={r_ea.n_trials}, oracle_calls={r_ea.oracle_calls}")
-        print(f"  Эп. B svc_e: success={r_eb.success}, trials={r_eb.n_trials}, oracle_calls={r_eb.oracle_calls}")
-        print(f"  oracle.n_calls={oracle.n_calls}, oracle.total_tokens={oracle.total_tokens}")
+        print(f"  Эп A svc_e: success={r_ea.success}, trials={r_ea.n_trials}, oracle={r_ea.oracle_calls}")
+        print(f"  Эп B svc_e: success={r_eb.success}, trials={r_eb.n_trials}, oracle={r_eb.oracle_calls}")
+        print(f"  oracle.n_calls={oracle.n_calls}, total_tokens={oracle.total_tokens}")
         print(f"  reverse_index: {bios_m6.reverse_index}")
         print(f"  bad_config: {sorted(bios_m6.bad_config)}")
-        print(
-            "\n[NOTE] Закрытый словарь причин {'memory','config'} — ограничение v1. "
-            "Новые типы отказов потребуют расширения словаря в v2."
-        )
 
-        # Проверки M6
         if not r_ea.success:
-            errors.append(f"Эп. A: ожидали success, got error={r_ea.error!r}")
+            errors.append(f"Эп A: ожидали success, got error={r_ea.error!r}")
         if r_ea.oracle_calls != 1:
-            errors.append(f"Эп. A: ожидали oracle_calls=1, got {r_ea.oracle_calls}")
+            errors.append(f"Эп A: ожидали oracle_calls=1, got {r_ea.oracle_calls}")
         if not r_eb.success:
-            errors.append(f"Эп. B: ожидали success, got error={r_eb.error!r}")
+            errors.append(f"Эп B: ожидали success, got error={r_eb.error!r}")
         if r_eb.oracle_calls != 0:
-            errors.append(f"Эп. B: ожидали oracle_calls=0, got {r_eb.oracle_calls}")
+            errors.append(f"Эп B: ожидали oracle_calls=0, got {r_eb.oracle_calls}")
         if oracle.total_tokens == 0:
-            errors.append("oracle.total_tokens=0 после Эп.A — учёт токенов не работает")
+            errors.append("oracle.total_tokens=0 — учёт не работает")
         if oracle.total_tokens != tokens_after_a:
-            errors.append(f"Токены выросли после Эп.B: {tokens_after_a} → {oracle.total_tokens}")
+            errors.append(f"Токены выросли после Эп B: {tokens_after_a} → {oracle.total_tokens}")
+        if ("svc_e", "bad") not in bios_m6.bad_config:
+            errors.append("bad_config не содержит (svc_e,bad)")
 
-    # Проверки M3-M5b (регресс)
+    # --- Проверки M3-M5b ---
     print("\n" + "=" * 60)
-    print("СВОДКА M3-M5b (регресс)")
+    print("СВОДКА M3-M5b")
     print("=" * 60)
     rows = [
-        ("svc_a", "heavy",   r_a),
-        ("svc_d", "heavy",   r_d),
-        ("svc_b", "light",   r_b),
-        ("svc_c", "heavy",   r_c),
+        ("svc_a", "heavy",   r_a,  4),
+        ("svc_d", "heavy",   r_d,  1),
+        ("svc_b", "light",   r_b,  2),
+        ("svc_c", "heavy",   r_c,  2),
+        ("svc_f", "xlarge",  r_f,  None),  # anti-hardcode: trials = log2(2048/64) + 1 = 6
     ]
-    for name, wc, r in rows:
-        print(f"  {name:6s} [{wc:5s}]  trials={r.n_trials}  learned={r.n_learned}  ok={r.success}")
+    for name, wc, r, expected_trials in rows:
+        print(f"  {name:6s} [{wc:6s}]  trials={r.n_trials}  ok={r.success}")
 
-    for name, _, r in rows:
+    for name, _, r, expected_trials in rows:
         if not r.success:
             errors.append(f"{name}: ожидали success, got {r.error!r}")
+        if expected_trials is not None and r.n_trials != expected_trials:
+            errors.append(f"{name}: ожидали {expected_trials} проб, got {r.n_trials}")
+
     if r_d.n_trials != 1:
         errors.append(f"svc_d: ожидали 1 пробу (transfer), got {r_d.n_trials}")
-    if ("heavy", 512) in bios_m5.unsafe_mem:
-        errors.append("unsafe_mem содержит (heavy,512) — класс-правило сломано!")
-    if ("svc_c", 512) not in bios_m5.unsafe_svc:
-        errors.append("unsafe_svc не содержит (svc_c,512) — карвинг не сработал")
+    if bios_m5.mem_threshold.get("heavy") != 512:
+        errors.append(f"mem_threshold[heavy]: ожидали 512, got {bios_m5.mem_threshold.get('heavy')}")
+    if bios_m5.mem_threshold_svc.get("svc_c") != 1024:
+        errors.append(f"mem_threshold_svc[svc_c]: ожидали 1024, got {bios_m5.mem_threshold_svc.get('svc_c')}")
+    if bios_m5.mem_threshold.get("xlarge") != 2048:
+        errors.append(f"mem_threshold[xlarge]: ожидали 2048 (anti-hardcode), got {bios_m5.mem_threshold.get('xlarge')}")
 
     print()
     if errors:

@@ -4,8 +4,8 @@ ProblemBuilder: BiosState → problem.pddl (чистый STRIPS, без стои
 Логика:
   - configopts: union всех config_options по всем сервисам;
     если пусто — добавляем «cfg_default» (always-on dummy).
-  - safe_buckets_for(svc) используется ТОЛЬКО как гейт существования:
-    если пусто → ValueError → plan()=None. Значение в PDDL не эмитируется.
+  - Memory feasibility проверяется агентом (ceiling); ProblemBuilder
+    проверяет только config-достижимость (config_ok факты).
   - config_ok(svc, opt):
       сервис БЕЗ config_options → True для всех opt (always-on pass-through).
       сервис С  config_options  → True только если (svc, opt) ∉ bad_config.
@@ -32,13 +32,6 @@ class ProblemBuilder:
         bios = self.bios
         if goal_service not in bios.services:
             raise ValueError(f"Unknown goal service: {goal_service!r}")
-
-        # --- Гейт: есть ли безопасный бакет (величина в PDDL не нужна) ---
-        for svc in sorted(bios.services.keys()):
-            if not bios.safe_buckets_for(svc):
-                raise ValueError(
-                    f"No safe bucket for {svc!r}: all buckets exhausted, no plan possible"
-                )
 
         # --- Configopts (детерминированный порядок) ---
         all_opts: list[str] = sorted({

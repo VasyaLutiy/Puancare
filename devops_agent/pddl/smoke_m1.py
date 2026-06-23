@@ -29,10 +29,8 @@ DOMAIN = os.path.join(PDDL_DIR, "domain.pddl")
 print("=== M1 DoD Smoke Test (STRIPS, #8) ===\n")
 errors = []
 
-# BiosState: svc_e, small buckets unsafe → safe=[512], bad_config={bad}
+# BiosState: svc_e, bad_config={bad} → планировщик выберет good
 bios = BiosState.initial(["svc_e"])
-for bad_bucket in [64, 128, 256]:
-    bios.mark_unsafe("standard", bad_bucket)
 bios.mark_bad_config("svc_e", "bad")
 
 print("[1] ProblemBuilder → problem.pddl ...")

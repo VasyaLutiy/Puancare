@@ -60,8 +60,8 @@ def run_section_a(world: World, oracle) -> tuple[list[EpisodeResult], BiosState]
     print(f"\n  Кривая trials:        {trials_curve}")
     print(f"  Кривая oracle_calls:  {oracle_curve}")
     print(f"\n  reverse_index итог:   {bios.reverse_index}")
-    print(f"  unsafe_mem:           {sorted(bios.unsafe_mem)}")
-    print(f"  unsafe_svc:           {sorted(bios.unsafe_svc)}")
+    print(f"  mem_threshold:        {bios.mem_threshold}")
+    print(f"  mem_threshold_svc:    {bios.mem_threshold_svc}")
     print(f"  bad_config:           {sorted(bios.bad_config)}")
 
     return results, bios
@@ -76,10 +76,8 @@ def run_section_b() -> int:
     print("B. ДЕТЕРМИНИЗМ АГЕНТА  (plan svc_a × 5)")
     print("=" * 62)
 
-    # Фиксированный BIOS: heavy@{64,128,256} unsafe → план должен дать b512
+    # Детерминизм планировщика: один и тот же BIOS → один и тот же план
     bios = BiosState.initial(["svc_a"])
-    for bad in [64, 128, 256]:
-        bios.mark_unsafe("heavy", bad)
 
     plans = [plan(bios, "svc_a") for _ in range(5)]
     distinct = len({tuple(p) if p else () for p in plans})

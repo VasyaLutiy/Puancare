@@ -21,7 +21,6 @@ from types import SimpleNamespace
 
 from devops_agent.model.ontology import WorldModel as _WorldModel
 from devops_agent.services import (
-    MEM_BUCKETS,
     _GROUND_TRUTH,
     _SERVICES,
     agent_view,
@@ -68,8 +67,6 @@ class World:
 
         if svc_name not in _SERVICES:
             raise ValueError(f"Unknown service: {svc_name!r}")
-        if mem_bucket not in MEM_BUCKETS:
-            raise ValueError(f"Bad mem_bucket={mem_bucket}, allowed: {MEM_BUCKETS}")
 
         svc = _SERVICES[svc_name]
         container = f"devops-{svc_name}-{mem_bucket}"
@@ -121,10 +118,10 @@ def _build_selftest_cases() -> list[tuple]:
     cases = []
     for svc_name, truth in _GROUND_TRUTH.items():
         min_safe = truth["min_safe_bucket"]
-        idx = MEM_BUCKETS.index(min_safe)
         config = truth.get("good_config", "good")
-        if idx > 0:
-            cases.append((svc_name, MEM_BUCKETS[idx - 1], config, "oom_killed"))
+        below = min_safe // 2   # ровно половина → OOM (без привязки к фиксированной сетке)
+        if below > 0:
+            cases.append((svc_name, below, config, "oom_killed"))
         cases.append((svc_name, min_safe, config, "running"))
     return cases
 
