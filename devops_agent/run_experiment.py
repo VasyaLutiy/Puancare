@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-run_experiment.py — M7: харнесс + триангуляция (критерий убийства §8)
+run_experiment.py — M4: харнесс + триангуляция + novel-instance фальсификатор
 
 A. Поток эпизодов: кривые trials и oracle_calls (амортизация)
-B. Детерминизм агента: plan(svc_a) × 5 → distinct планов
-C. Baseline gpt-5.4-mini: 5× один промпт → дисперсия + токены
-D. Terraform vs агент (счётчик)
-E. Вердикт §8: ЖИВ или ХОРОНИМ ЧЕСТНО
+B. Детерминизм агента: plan(svc_a) × 5 → distinct поведений
+C. Baseline gpt: дисперсия + токены (агент в установившемся → 0)
+D. Human-edits: агент 0 vs terraform ≥1
+E. Вердикт §8: ЖИВ / ХОРОНИМ ЧЕСТНО
+F. Novel-instance фальсификатор: новый класс + кривой footprint —
+   сходится удвоением только данными, без правок логики.
 
-Переиспользует bios/world/agent/oracle — ноль новых сущностей.
+Мир M3: удвоение от MEM_BASE=64, без бакет-сетки.
+Планировщик чистый STRIPS (#8): нет numeric, нет :metric.
 """
 
 import sys
@@ -19,10 +22,10 @@ if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
 from devops_agent.agent import Agent, EpisodeResult
-from devops_agent.bios import BiosState, plan
+from devops_agent.bios import BiosState, MEM_BASE, plan
 from devops_agent.world import World
 
-# Последовательность: новизна → перенос → повтор → ещё повтор
+# Последовательность: новизна → перенос → новый класс → карвинг → M6 → повторы
 EPISODE_SEQUENCE = ["svc_a", "svc_d", "svc_b", "svc_c", "svc_e", "svc_e", "svc_d", "svc_b"]
 ALL_SVCS = list(dict.fromkeys(EPISODE_SEQUENCE))  # уникальные, порядок сохранён
 
@@ -33,7 +36,7 @@ ALL_SVCS = list(dict.fromkeys(EPISODE_SEQUENCE))  # уникальные, пор
 
 def run_section_a(world: World, oracle) -> tuple[list[EpisodeResult], BiosState]:
     print("\n" + "=" * 62)
-    print("A. ПОТОК ЭПИЗОДОВ")
+    print("A. ПОТОК ЭПИЗОДОВ  (мир M3: удвоение от MEM_BASE)")
     print("=" * 62)
     print(f"  Последовательность: {EPISODE_SEQUENCE}\n")
 
@@ -41,12 +44,13 @@ def run_section_a(world: World, oracle) -> tuple[list[EpisodeResult], BiosState]
     agent = Agent(world, bios, oracle=oracle, verbose=False)
 
     results: list[EpisodeResult] = []
+    seen: set[str] = set()
     for i, svc in enumerate(EPISODE_SEQUENCE, 1):
+        is_repeat = svc in seen
         r = agent.run_episode(svc)
+        seen.add(svc)
         wc = bios.services[svc]["workload_class"]
-        tag = ""
-        if i > 1 and svc in [EPISODE_SEQUENCE[j] for j in range(i - 1)]:
-            tag = " (повтор)"
+        tag = " (повтор)" if is_repeat else ""
         print(
             f"  #{i:2d} {svc:6s} [{wc:8s}]  "
             f"trials={r.n_trials}  learned={r.n_learned}  "
@@ -54,14 +58,14 @@ def run_section_a(world: World, oracle) -> tuple[list[EpisodeResult], BiosState]
         )
         results.append(r)
 
-    trials_curve = [r.n_trials      for r in results]
-    oracle_curve = [r.oracle_calls  for r in results]
+    trials_curve = [r.n_trials     for r in results]
+    oracle_curve = [r.oracle_calls for r in results]
 
     print(f"\n  Кривая trials:        {trials_curve}")
     print(f"  Кривая oracle_calls:  {oracle_curve}")
-    print(f"\n  reverse_index итог:   {bios.reverse_index}")
-    print(f"  mem_threshold:        {bios.mem_threshold}")
+    print(f"\n  mem_threshold:        {bios.mem_threshold}")
     print(f"  mem_threshold_svc:    {bios.mem_threshold_svc}")
+    print(f"  reverse_index итог:   {bios.reverse_index}")
     print(f"  bad_config:           {sorted(bios.bad_config)}")
 
     return results, bios
@@ -75,27 +79,27 @@ def run_section_b() -> int:
     print("\n" + "=" * 62)
     print("B. ДЕТЕРМИНИЗМ АГЕНТА  (plan svc_a × 5)")
     print("=" * 62)
+    print("  Примечание: планировщик чистый STRIPS (#8) — нет метрики,")
+    print("  сравниваем шаги плана (config-feasibility), а не стоимость.\n")
 
-    # Детерминизм планировщика: один и тот же BIOS → один и тот же план
     bios = BiosState.initial(["svc_a"])
-
     plans = [plan(bios, "svc_a") for _ in range(5)]
     distinct = len({tuple(p) if p else () for p in plans})
 
     print(f"  Пример плана (× 5): {plans[0]}")
-    print(f"  Все одинаковые:      {'да' if distinct == 1 else 'НЕТ'}")
+    print(f"  Все одинаковые:     {'да' if distinct == 1 else 'НЕТ'}")
     print(f"  distinct = {distinct}  (σ=0 ← детерминизм)")
 
     return distinct
 
 
 # ---------------------------------------------------------------------------
-# C. Baseline gpt-5.4-mini
+# C. Baseline gpt
 # ---------------------------------------------------------------------------
 
 def run_section_c() -> tuple[int, int]:
     print("\n" + "=" * 62)
-    print("C. BASELINE gpt-5.4-mini  (5× svc_x@256 OOMKilled)")
+    print("C. BASELINE gpt  (5× svc_x@256 OOMKilled)")
     print("=" * 62)
 
     try:
@@ -138,12 +142,12 @@ def run_section_c() -> tuple[int, int]:
 
 
 # ---------------------------------------------------------------------------
-# D. Terraform vs агент
+# D. Human-edits
 # ---------------------------------------------------------------------------
 
 def print_section_d() -> None:
     print("\n" + "=" * 62)
-    print("D. TERRAFORM VS АГЕНТ  (счётчик, не реализация)")
+    print("D. HUMAN-EDITS  (агент 0 vs terraform ≥1)")
     print("=" * 62)
     print("  agent_human_edits    = 0  ← агент выучил сам через пробы")
     print("  terraform_human_edits ≥ 1  ← человек пишет конфиг вручную")
@@ -168,17 +172,16 @@ def print_verdict(
     trials_curve = [r.n_trials     for r in results]
 
     # Критерий 1: trials(повтор) < trials(первый)
-    trials_first  = trials_curve[0]          # svc_a: первое знакомство
-    # Повтор: берём первый эпизод с тегом "повтор" — svc_d (ep 2)
-    trials_repeat = trials_curve[1]          # svc_d transfer
+    trials_first  = trials_curve[0]   # svc_a: первое знакомство
+    trials_repeat = trials_curve[1]   # svc_d: transfer (1 проба)
     ok1 = trials_repeat < trials_first
     print(f"  [1] trials(первый={trials_first}) > trials(повтор={trials_repeat}):  {'✓' if ok1 else '✗'}")
 
-    # Критерий 2: oracle_calls падает к 0
+    # Критерий 2: oracle_calls амортизируется (хвост = 0 после пика)
     peak_val = max(oracle_curve) if oracle_curve else 0
     if peak_val == 0:
-        ok2 = None  # oracle не вызывался (Azure недоступен)
-        print(f"  [2] oracle_calls → 0:  [N/A — oracle не вызывался]")
+        ok2 = None
+        print("  [2] oracle_calls → 0:  [N/A — oracle не вызывался]")
     else:
         peak_idx = oracle_curve.index(peak_val)
         tail = oracle_curve[peak_idx + 1:]
@@ -189,20 +192,17 @@ def print_verdict(
             f" хвост={tail}):  {'✓' if ok2 else '✗'}"
         )
 
-    # Критерий 3: distinct(агент) < distinct(LLM)
+    # Критерий 3: distinct(агент)=1 (детерминизм)
+    ok3 = distinct_agent == 1
     if distinct_llm == -1:
-        ok3 = None
-        print(f"  [3] distinct(агент={distinct_agent}) < distinct(LLM):  [N/A — Azure недоступен]")
+        print(f"  [3] distinct(агент={distinct_agent}):  {'✓' if ok3 else '✗'}  [LLM N/A]")
     else:
-        ok3 = distinct_agent == 1 and distinct_llm >= distinct_agent
-        # Бонус: даже если distinct одинаков — агент тратит 0 токенов
-        token_note = f"  | LLM: {llm_tokens} токенов, агент в установившемся: 0"
+        token_note = f"  | LLM: {llm_tokens} токенов, агент: 0 в установившемся"
         print(
             f"  [3] distinct(агент={distinct_agent}) vs distinct(LLM={distinct_llm}):  "
             f"{'✓' if ok3 else '✗'}{token_note}"
         )
 
-    # Финальный вердикт
     criteria = [ok1, ok2, ok3]
     applicable = [c for c in criteria if c is not None]
     alive = all(applicable) and len(applicable) > 0
@@ -216,13 +216,75 @@ def print_verdict(
         print(f"  ► ВЕРДИКТ:  ХОРОНИМ ЧЕСТНО ✗  (не прошли критерии: {failed})")
 
     print()
-    print("[HONEST-NOTE v1]")
+    print("[HONEST-NOTE M3]")
     print("  • Словарь причин {memory,config} закрыт — v2 расширит.")
-    print("  • Бакеты дискретны [64,128,256,512,1024] — numeric ENHSP в v2.")
+    print("  • Размер памяти = base·2^k (удвоение); планировщик — чистый STRIPS.")
     print("  • Docker ≠ k8s, одна машина, синтетический footprint.")
     print("  • LLM baseline без истории — честное, но не исчерпывающее сравнение.")
 
     return alive
+
+
+# ---------------------------------------------------------------------------
+# F. Novel-instance фальсификатор
+# ---------------------------------------------------------------------------
+
+def run_section_f(world: World) -> bool:
+    """
+    Порождает сервис с новым классом и кривым footprint (не степень двойки).
+    Утверждает: агент сходится удвоением ТОЛЬКО данными (без правок кода).
+    Если потребовал правок — печатает честно «не обобщается».
+    """
+    print("\n" + "=" * 62)
+    print("F. NOVEL-INSTANCE ФАЛЬСИФИКАТОР")
+    print("=" * 62)
+    print("  Новый класс 'premium', footprint=350 MiB (не степень двойки).")
+    print("  Инъекция только данными — agent/bios/world не трогаем.\n")
+
+    from devops_agent.services import _SERVICES, _alloc_cmd
+
+    NOVEL_SVC = "_svc_novel_premium"
+    NOVEL_FOOTPRINT = 350   # MiB, «кривой» (не степень двойки, совпадает с svc_a физически)
+    NOVEL_CLASS = "premium"  # новый класс, которого не было ни в одном тесте
+
+    # Runtime-инъекция: только данные, ноль строк кода в agent/bios/world
+    _SERVICES[NOVEL_SVC] = {
+        "image": "python:3.11-slim",
+        "workload_class": NOVEL_CLASS,
+        "cmd": ["python", "-c", _alloc_cmd(NOVEL_FOOTPRINT)],
+    }
+
+    try:
+        bios = BiosState.initial([NOVEL_SVC])
+        agent = Agent(world, bios, oracle=None, verbose=True)
+
+        result = agent.run_episode(NOVEL_SVC)
+
+        expected_threshold = None
+        for mib in [MEM_BASE * (2 ** k) for k in range(20)]:
+            if mib > NOVEL_FOOTPRINT:
+                expected_threshold = mib
+                break
+
+        print(f"\n  Результат: success={result.success}, trials={result.n_trials}")
+        print(f"  mem_threshold['premium'] = {bios.mem_threshold.get(NOVEL_CLASS)}")
+        print(f"  Ожидали threshold = {expected_threshold}")
+
+        ok = (
+            result.success
+            and bios.mem_threshold.get(NOVEL_CLASS) == expected_threshold
+        )
+
+        if ok:
+            print(f"\n  ► F: ОБОБЩАЕТСЯ ✓ — сошёлся удвоением только данными")
+        else:
+            print(f"\n  ► F: НЕ ОБОБЩАЕТСЯ ✗ — требует правок кода (хардкод)")
+
+        return ok
+
+    finally:
+        # Убираем инъекцию после теста
+        _SERVICES.pop(NOVEL_SVC, None)
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +293,7 @@ def print_verdict(
 
 def main() -> None:
     print("╔══════════════════════════════════════════════════════════════╗")
-    print("║  M7: ХАРНЕСС + ТРИАНГУЛЯЦИЯ  —  DevOps agent v1             ║")
+    print("║  M4: ХАРНЕСС + NOVEL-INSTANCE ФАЛЬСИФИКАТОР  (мир M3)       ║")
     print("╚══════════════════════════════════════════════════════════════╝")
 
     world = World()
@@ -248,8 +310,15 @@ def main() -> None:
     distinct_llm, llm_tokens = run_section_c()
     print_section_d()
     alive = print_verdict(results, distinct_agent, distinct_llm, llm_tokens)
+    novel_ok = run_section_f(world)
 
-    sys.exit(0 if alive else 1)
+    print("\n" + "=" * 62)
+    print("ИТОГ M4")
+    print("=" * 62)
+    print(f"  §8 вердикт:         {'ЖИВ ✓' if alive else 'ХОРОНИМ ✗'}")
+    print(f"  Novel-instance F:   {'ОБОБЩАЕТСЯ ✓' if novel_ok else 'НЕ ОБОБЩАЕТСЯ ✗'}")
+
+    sys.exit(0 if (alive and novel_ok) else 1)
 
 
 if __name__ == "__main__":
