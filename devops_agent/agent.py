@@ -14,7 +14,6 @@ Default causes (без oracle, для очевидных симптомов):
   unhealthy  → config (используется как fallback если oracle=None)
 """
 
-import re
 import sys
 from dataclasses import dataclass, field
 
@@ -65,16 +64,6 @@ class EpisodeResult:
 # Вспомогательные функции
 # ---------------------------------------------------------------------------
 
-_CONFIG_RE = re.compile(r'set_config\(\w+,\s*(\w+)\)')
-
-
-def _extract_config(steps: list[str]) -> str:
-    """Извлечь config из 'set_config(svc, good)'. Default 'good' если нет set_config."""
-    for step in steps:
-        m = _CONFIG_RE.search(step)
-        if m:
-            return m.group(1)
-    return "good"
 
 
 def _bump_reverse(reverse_index: dict[str, list[str]], symptom: str, cause: str) -> None:
@@ -131,7 +120,7 @@ class Agent:
                 )
 
             bucket = self.bios.safe_buckets_for(svc_name)[0]
-            config = _extract_config(steps)
+            config = self.bios._choose_config(svc_name)
             self._log(f"  plan: {steps}")
 
             # 2. Act
@@ -140,8 +129,9 @@ class Agent:
 
             # 3. Compare: predict=running
             if obs.phase == "running":
-                # Успех: подтвердить class-safe + поднять причину в reverse_index
+                # Успех: подтвердить class-safe, зафиксировать incumbent, поднять причину
                 self.bios.confirm_safe(wc, bucket)
+                self.bios.incumbent_config[svc_name] = config
                 if last_symptom and last_cause:
                     _bump_reverse(self.bios.reverse_index, last_symptom, last_cause)
                 trials.append(Trial(bucket=bucket, config=config, obs=obs, learned=False))
@@ -260,6 +250,9 @@ def _selftest() -> None:
     except Exception as e:
         print(f"\n  [SKIP M6] Oracle недоступен: {e}")
         oracle_available = False
+
+    if not oracle_available:
+        errors.append("M6 пропущен (Oracle недоступен) — skip считается ошибкой")
 
     if oracle_available:
         # Один BIOS на весь сеанс: переносим накопленные знания из M3-M5b

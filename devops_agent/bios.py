@@ -45,17 +45,24 @@ class BiosState:
     unsafe_svc: set[tuple[str, int]]                 # {(svc_name, bucket)} — per-service
     known_safe_class: set[tuple[str, int]]           # {(wc, bucket)} confirmed running
     bad_config: set[tuple[str, str]]                 # {(svc_name, config_opt)}
+    incumbent_config: dict[str, str]                 # {svc_name: current applied config}
     reverse_index: dict[str, list[str]] = field(default_factory=dict)
 
     @classmethod
     def initial(cls, svc_names: list[str]) -> "BiosState":
+        svcs = {n: agent_view(n) for n in svc_names}
         return cls(
-            services={n: agent_view(n) for n in svc_names},
+            services=svcs,
             buckets=sorted(MEM_BUCKETS),
             unsafe_mem=set(),
             unsafe_svc=set(),
             known_safe_class=set(),
             bad_config=set(),
+            incumbent_config={
+                n: svcs[n]["current_config"]
+                for n in svc_names
+                if "current_config" in svcs[n]
+            },
         )
 
     def mark_unsafe(self, workload_class: str, bucket_mib: int) -> None:
@@ -85,6 +92,23 @@ class BiosState:
 
     def safe_buckets_for(self, svc_name: str) -> list[int]:
         return [b for b in self.buckets if not self.is_unsafe_for_deploy(svc_name, b)]
+
+    def _choose_config(self, svc: str) -> str | None:
+        """
+        Выбирает конфиг для world.apply (политика агента, не планировщик).
+        Приоритет: наследство (incumbent) если не known-bad, иначе
+        детерминированная непровальная альтернатива.
+        """
+        opts = self.services[svc].get("config_options")
+        if not opts:
+            return "cfg_default"                        # сервис без config → always-on dummy
+        inc = self.incumbent_config.get(svc)
+        if inc is not None and not self.is_bad_config(svc, inc):
+            return inc                                  # действуем по наследству
+        for o in sorted(opts):                          # детерминированная альтернатива
+            if not self.is_bad_config(svc, o):
+                return o
+        return None                                     # все known-bad → нет валидного config
 
 
 # ---------------------------------------------------------------------------

@@ -81,6 +81,7 @@ _SERVICES = {
         # M6: нужна И память (≥512), И config=good
         # exit(3) при config≠good → world маппит на phase='unhealthy'
         "config_options": ["good", "bad"],  # наблюдаемый набор, агент видит через agent_view
+        "current_config": "bad",            # наблюдаемое наследство (агент видит, что плохой)
         "cmd": ["python", "-c", _alloc_and_config_cmd(350)],
     },
 }
@@ -110,6 +111,8 @@ def agent_view(svc_name: str) -> dict:
     }
     if "config_options" in svc:
         view["config_options"] = list(svc["config_options"])
+    if "current_config" in svc:
+        view["current_config"] = svc["current_config"]
     return view
 
 
