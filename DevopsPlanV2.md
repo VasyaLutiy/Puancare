@@ -31,15 +31,15 @@ v2 **не меняет гипотезу и не ослабляет критер�
   `config_ok` только для **подтверждённых** opt (см. «Закон модели»). Ноль ветвлений в коде.
 - **Онтология во внешних YAML.** `ontology.yaml` — единый источник правды для sensor-правил,
   словаря симптомов/причин и `cause→repair`. Добавляем зависимость `pyyaml`.
-- **Numeric-память живёт в мире/BIOS, не в планировщике (поправка после M0).** Бакеты убираются
-  совсем. Память — вещественный **порог** `min_safe_mem`, который агент **выучивает бисекцией в
-  мире** (он сразу вещественный — это и убивает бакеты). В **домене** памяти как переменной
-  решения НЕТ: планировщику задаётся булев предикат `mem_ok` + порог входит **только как
-  стоимость действия** (`:action-costs`). Планировщик минимизирует стоимость → тянется к
-  минимальной безопасной памяти, не рассуждая о числах.
-- **Движок — Fast Downward-opt (БЕЗ ENHSP).** Это `:action-costs` со статической стоимостью —
-  ровно то, что FD-opt уже решал оптимально в v1 (M2/M7, вердикт ЖИВ). ENHSP не нужен и убирается
-  из зависимостей. См. раздел «Поправка M0».
+- **Величины живут в обучении, планировщик — чисто логический (поправки M0 + #8).** Бакеты и числа
+  убираются из домена совсем. «Сколько ресурса» (порог) агент **выучивает в мире** (бисекция) и
+  применяет сам; «какое значение» (int/real/категория) — целиком забота обучения, в любом домене.
+  В **домене** — только булевы предикаты (`mem_ok`, `config_ok`, …): «можно ли развернуть, учитывая
+  что знаем?». **Ни стоимостей, ни `:metric`** — их нет. Минимизация уже сделана обучением, не
+  планировщиком.
+- **Движок — любой классический планировщик (Fast Downward, БЕЗ ENHSP).** Домен — чистый STRIPS
+  (булева логика, без чисел) → нет вопроса «int или real», нет привязки к движку, поддерживающему
+  numeric-costs. ENHSP не нужен; стоимости/метрика тоже не нужны. См. «Поправка #8».
 
 ## Закон модели v2 — «unknown → verify → trust» (на нём строится всё)
 
@@ -74,8 +74,8 @@ M3 и далее строятся на этом законе. Прямой ша�
 
 ```
 1. ПЛАНИРОВОЧНЫЙ ДОМЕН (PDDL)          devops_agent/pddl/domain.pddl     ← статичный, рукописный
-   типы / предикаты / numeric functions    (цель будущего конструктора-редактора)
-   / actions / :metric
+   типы / булевы предикаты / actions       (цель будущего конструктора-редактора)
+   (чистый STRIPS — без чисел и :metric)
 
 2. ГЕНЕРАТОР ПРОБЛЕМЫ                   devops_agent/model/problem.py
    BiosState + goal → problem.pddl(текст) → PDDLReader.parse_problem() → up.Problem
@@ -86,9 +86,10 @@ M3 и далее строятся на этом законе. Прямой ша�
    (схлопывает ВСЕ if/elif из world.py / agent.py / oracle.py)
 ```
 
-**Связь слоёв:** правило `cause→repair` из онтологии правит ровно то, что проецируется в
-`domain.pddl` (порог → `mem_cost`, `bad_config` → `config_ok`). «Conditions» из твоего примера
-живут как **данные** в онтологии и ссылаются на предикаты домена — не как `if/elif`.
+**Связь слоёв:** правило `cause→repair` из онтологии правит знания BIOS, которые проецируются в
+булевы факты `:init` (`bad_config` → исключение из `config_ok`) либо используются агентом для
+выбора величины (порог → объём памяти, подаваемый в мир). «Conditions» из твоего примера живут
+как **данные** в онтологии и ссылаются на предикаты домена — не как `if/elif`.
 
 ## Поправка M0 — почему числа уходят из домена
 
@@ -100,58 +101,69 @@ M0 (risk-gate) сразу вскрыл архитектурную ошибку �
 единственный движок с гарантией оптимальности. (Диагноз M0: парсинг ОК, но `enhsp-opt` не берёт
 эту фичу; `enhsp` satisficing берёт, но без оптимальности → DoD не выполним.)
 
-**Вывод:** числовой интеллект принадлежит **обучению** (бисекция находит вещественный порог), а
-не планировщику. Убираем число из домена; порог входит как **стоимость**.
+**Вывод:** числовой интеллект принадлежит **обучению**, а не планировщику. M0 убрал число из
+*эффектов/предусловий*, оставив его как **стоимость**. Поправка #8 идёт до конца и убирает и
+стоимость тоже — см. ниже.
 
-## Доменная модель (FD-opt, action-costs)
+## Поправка #8 — почему стоимость уходит из планировщика совсем
 
-Памяти-как-fluent в домене нет. Решение планировщика — чисто булево (да/нет), число приходит
-сбоку как «ценник».
+#8 (всплыл на M2-прогоне) показал следующий слой той же ошибки. FD-opt в оптимальном режиме
+минимизирует стоимость **только целочисленную**; PDDL-тип `number` UP трактует как real
+(`mem_cost → real`), и движок выдаёт `REAL_NUMBERS_IN_ACTIONS_COST not supported`
+(`supports()=False`). Соблазн «раз память в MiB целая — заставим всех быть целыми» — домен-
+специфичный костыль (другой домен даст дробную величину).
+
+Корень глубже: **стоимость в планировщике — рудимент M0, который ничего не делает.** По факту
+кода (M1+#7): объём памяти подаёт агент (`safe_buckets_for[0]`), конфиг — агент (`_choose_config`),
+а от плана агент использует только «существует ли он» (да/нет); сами шаги и ценники игнорируются.
+Метрика не различает ни одного плана (он один-единственный) — она инертна.
+
+**Вывод:** минимизация уже живёт в **обучении** (бисекция находит минимум), не в планировщике.
+Стоимость/метрику убираем целиком. Это не заплатка про «int vs real», а снятие проблемы по корню:
+**чисел в планировщике нет → нет и вопроса об их типе**, в любом домене. Реализация — #8.
+
+## Доменная модель (чистый STRIPS, без чисел)
+
+В домене — только булева логика: «можно ли развернуть, учитывая что знаем?». Никаких функций,
+стоимостей и `:metric`.
 
 ```pddl
 (define (domain devops)
-  (:requirements :strips :typing :action-costs)
+  (:requirements :strips :typing :negative-preconditions)
   (:types service configopt - object)
   (:predicates
     (running    ?s - service)
-    (mem_ok     ?s - service)                 ; память выделена ≥ порога (булево)
+    (mem_ok     ?s - service)                 ; память выделена (булево; «сколько» — у агента)
     (config_set ?s - service ?o - configopt)
-    (config_ok  ?s - service ?o - configopt)) ; (s,o) не в bad_config
-  (:functions
-    (mem_cost ?s - service)   ; СТАТ. стоимость провижна = выученный порог (из BIOS)
-    (total-cost))
+    (config_ok  ?s - service ?o - configopt)) ; (s,o) не known-bad
 
-  ; set_mem: пометить память выделенной. Стоимость = выученный порог (статич. функция).
   (:action set_mem
     :parameters (?s - service)
-    :effect (and (mem_ok ?s)
-                 (increase (total-cost) (mem_cost ?s))))
+    :precondition (not (mem_ok ?s))
+    :effect (mem_ok ?s))
 
   (:action set_config
     :parameters (?s - service ?o - configopt)
+    :precondition (not (config_set ?s ?o))
     :effect (config_set ?s ?o))
 
   (:action deploy
     :parameters (?s - service ?o - configopt)
-    :precondition (and (mem_ok ?s)
-                       (config_set ?s ?o)
-                       (config_ok ?s ?o))
-    :effect (running ?s))
-
-  (:metric minimize (total-cost)))
+    :precondition (and (not (running ?s)) (mem_ok ?s)
+                       (config_set ?s ?o) (config_ok ?s ?o))
+    :effect (running ?s)))
 ```
 
-`mem_cost(s)` — **статическая** функция (задаётся в `:init`, в эффектах не меняется) → это
-`STATIC_FLUENTS_IN_ACTION_COST` + `ACTION_COSTS`, которые FD-opt берёт оптимально. Никаких
-`assign`/numeric-precondition → блокер ENHSP исчезает.
+Чистый STRIPS → решается любым классическим движком (FD без opt-метрики, и т.п.); вопрос
+`int/real` не возникает.
 
 **Кто что делает (честная граница):**
-- **Планировщик** секвенирует `set_config → set_mem → deploy`, доказывает достижимость цели и
-  выбирает **дешёвший** план (среди реальных альтернатив: сервисы/конфиги/стратегии). Чисел не
-  считает — сравнивает ценники.
-- **Обучение** (петля агента) добывает вещественный порог интервенцией в мире и кладёт его в
-  `mem_cost` через `:init`. Тезис проекта в силе: **учим модель мира, не политику**; планировщик
-  потребляет модель.
+- **Планировщик** — *логика*: секвенирует `set_config → set_mem → deploy` и доказывает
+  достижимость цели при текущих знаниях (план есть ⇔ есть `mem_ok`-путь и непровальный config).
+  Чисел не касается.
+- **Обучение** (петля агента) — *величины*: добывает порог интервенцией и **само** применяет его
+  к миру (объём памяти, выбор config). Тезис проекта в силе: **учим модель мира, не политику**;
+  планировщик потребляет логику модели, обучение владеет числами.
 
 ## Схема знаний BIOS (меняется под numeric)
 
@@ -165,9 +177,11 @@ known_safe:        set[tuple[str,int]]   # подтверждённые (svc, me
 reverse_index:     dict[str, list[str]]  # как в v1 (НЕ засеваем — зарабатываем опытом)
 ```
 
-Проекция в `:init`: `mem_cost(s) = mem_threshold_svc.get(s) or mem_threshold[wc] or MAX_BOUND`
-(статическая стоимость действия `set_mem`). До первого знания о классе — `MAX_BOUND`
-(консервативно безопасно, план дорогой → есть что минимизировать обучением).
+Порог в домен **не проецируется** (чисел в домене нет). Он — знание агента: `_choose_mem(s) =
+mem_threshold_svc.get(s) or mem_threshold[wc] or MAX_BOUND` — агент **сам** подаёт этот объём в
+мир (как `safe_buckets_for[0]` сейчас и бисекция на M3). До первого знания о классе — `MAX_BOUND`
+(консервативно безопасно; минимум добывается обучением, не планировщиком). В `:init` идут только
+булевы факты (`config_ok` для не-known-bad opt, и т.п.).
 
 ## Петля обучения = numeric-бисекция
 
@@ -175,7 +189,7 @@ v1 «помечал бакет unsafe». v2 сужает интервал на �
 - держим на класс `lo_safe` (наименьший known-running) и `hi_unsafe` (наибольший known-OOM);
 - OOM при `X` → `hi_unsafe = max(hi_unsafe, X)`; running при `X` → `lo_safe = min(lo_safe, X)`;
 - следующая проба = середина `(hi_unsafe, lo_safe)`, стоп при гранулярности `STEP` (напр. 32 MiB);
-- порог (→ `mem_cost` в `:init`) ← `lo_safe`. Перенос на новый сервис того же класса → 1 проба (как M4).
+- порог ← `lo_safe` (агент сам подаёт объём в мир, в домен не проецируется). Перенос на новый сервис того же класса → 1 проба (как M4).
 
 Метрики §8 сохраняются: trials-to-converge = шаги бисекции (первый раз `O(log(range/STEP))`,
 повтор → 1); oracle-кривая, детерминизм, человеко-правки — без изменений.
@@ -193,8 +207,8 @@ causes:   [memory, config]              # источник CAUSES для oracle.
 obvious:  {oom_killed: memory}          # _OBVIOUS_CAUSES — оракул не нужен
 fallback: {unhealthy: config}           # _FALLBACK_CAUSES при oracle=None
 repair:                                 # cause → как править BIOS (ссылается на предикаты домена)
-  memory: {kind: numeric_threshold, store: mem_threshold, carve: true}  # → mem_cost в :init
-  config: {kind: set_member,        store: bad_config}                  # → config_ok в :init
+  memory: {kind: numeric_threshold, store: mem_threshold, carve: true}  # → объём подаёт агент
+  config: {kind: set_member,        store: bad_config}                  # → config_ok (булев) в :init
 ```
 
 Один файл — единственный источник правды. `world.py`, `agent.py`, `oracle.py` читают его,
@@ -204,14 +218,14 @@ repair:                                 # cause → как править BIOS (
 
 ```
 devops_agent/
-  pddl/domain.pddl          # статичный домен (action-costs, булевые preconds, always-on config)
+  pddl/domain.pddl          # статичный домен (чистый STRIPS, булевы preconds, always-on config)
   model/
     domain.py               # PddlDomain: загрузка domain.pddl, метаданные, write()
     problem.py              # ProblemBuilder: BiosState+goal → problem.pddl → up.Problem (+ dump)
     ontology.py             # WorldModel: загрузка ontology.yaml, sensor/symptom/cause/repair API
     ontology.yaml
   bios.py                   # ТОЛЬКО хранилище знаний (пороги). compile_to_up УДАЛЁН.
-  planner.py                # plan(bios, goal): ProblemBuilder + OneshotPlanner("fast-downward-opt")
+  planner.py                # plan(bios, goal): ProblemBuilder + OneshotPlanner (классич., без opt-метрики)
   world.py                  # apply(): docker --memory=<число>; obs→phase через WorldModel
   agent.py                  # фиксы через ontology.repair (table-driven, без if/elif)
   oracle.py                 # CAUSES из ontology
@@ -220,11 +234,9 @@ devops_agent/
 
 ## Милстоуны v2 (каждый верифицируется отдельно)
 
-- **V2-M0 — smoke-тест стека (риск-гейт, делаем ПЕРВЫМ).** ✅ *Закрыт с поправкой:* numeric-в-домене
-  отвергнут (см. «Поправка M0»), курс — **Fast Downward-opt + action-costs**. Новый DoD: `pip install pyyaml`
-  (ENHSP НЕ ставим; `up-fast-downward` уже в стеке); `PDDLReader` парсит `domain.pddl`
-  (`:strips :typing :action-costs`, `increase total-cost` со статической функцией); `OneshotPlanner("fast-downward-opt")`
-  решает тривиальную проблему со статусом **SOLVED_OPTIMALLY**; версии в `requirements.txt`.
+- **V2-M0 — smoke-тест стека (риск-гейт).** ✅ Закрыт. numeric-в-домене отвергнут (см. «Поправка M0»);
+  изначально взяли FD-opt + `:action-costs`, но **#8 убрал и стоимость** (см. «Поправка #8») —
+  итог: чистый STRIPS, классический планировщик. ENHSP не ставим; `up-fast-downward`/`pyyaml` в стеке.
 - **V2-M1 — PDDL-домен + генератор проблемы.** `domain.pddl` + `PddlDomain` + `ProblemBuilder`
   (BIOS→problem.pddl→Problem, дамп на диск). `planner.py`. `compile_to_up` удалён.
   Регресс: план для известного порога идентичен ожиданиям (3 шага: `set_config → set_mem → deploy`).
