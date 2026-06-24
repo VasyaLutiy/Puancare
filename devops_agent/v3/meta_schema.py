@@ -34,17 +34,22 @@ class Predicate:
 class Intervention:
     """PDDL-действие. set_<dim> устанавливает предикат; deploy — терминальное."""
     name: str                    # "set_mem" | "set_config" | "deploy"
-    requires: list[str] = field(default_factory=list)      # имена предикатов → :precondition
-    establishes: list[str] = field(default_factory=list)   # имена предикатов → :effect
-    binds_actuator: str | None = None                       # ключ рычага или None (deploy)
+    requires: list = field(default_factory=list)      # имена предикатов → :precondition (positive)
+    establishes: list = field(default_factory=list)   # имена предикатов → :effect
+    binds_actuator: str | None = None                  # ключ рычага или None (deploy)
 
 
 @dataclass
 class MetaDomain:
-    """Растущий объект-домен: что выучено. domain_gen сериализует его в PDDL."""
-    predicates: dict[str, Predicate] = field(default_factory=dict)
-    interventions: dict[str, Intervention] = field(default_factory=dict)
-    deploy_requires: list[str] = field(default_factory=list)  # растёт по мере минтинга
+    """
+    Растущий объект-домен. domain_gen сериализует его в PDDL.
+      predicates  — только МИНТНУТЫЕ предикаты (mem_ok, config_ok); running эмитится отдельно.
+      interventions — только МИНТНУТЫЕ set_* действия; deploy эмитится отдельно из deploy_requires.
+      deploy_requires — предикаты, которых требует deploy (растёт при каждом минтинге).
+    """
+    predicates: dict = field(default_factory=dict)        # name -> Predicate
+    interventions: dict = field(default_factory=dict)     # name -> Intervention (set_* only)
+    deploy_requires: list = field(default_factory=list)   # имена предикатов
 
 
 # --- JSON-дискриминатор для LLM (передаётся в AzureJSON.ask(schema=...)) -----
@@ -63,14 +68,28 @@ _CANON = {"memory": "mem_ok", "config": "config_ok"}
 
 
 def canonical_predicate_name(dimension: str) -> str:
-    """Детерминированное имя предиката из ключа рычага. TODO(v3): _CANON.get(dim, f'{dim}_ok')."""
-    raise NotImplementedError("TODO(v3): см. DevopsPlanV3.md §Канонизация имён")
+    """Детерминированное имя предиката из ключа рычага (антисиноним + детерминизм домена)."""
+    return _CANON.get(dimension, f"{dimension}_ok")
 
 
-def validate_proposal(raw: dict, known_actuators: list[str]) -> dict:
+def validate_proposal(raw: dict, known_actuators: list) -> dict:
     """
     Проверить ответ LLM против грамматики и вернуть нормализованный фрагмент.
-    Правила: raw['dimension'] ∈ known_actuators; raw['kind'] ∈ VALID_KINDS.
-    TODO(v3): на нарушении — ValueError (вызовет ретрай у proposer'а).
+    Нарушение → ValueError (proposer словит и ретрайнет / агент опровергнет).
+    Имя предиката НЕ доверяем LLM — выводим канонически; raw-имя сохраняем как _llm_name (лог).
     """
-    raise NotImplementedError("TODO(v3): валидация дискриминатора")
+    if not isinstance(raw, dict):
+        raise ValueError(f"proposal не dict: {raw!r}")
+    dim = raw.get("dimension")
+    kind = raw.get("kind")
+    if dim not in known_actuators:
+        raise ValueError(f"dimension {dim!r} не из поверхности рычагов {known_actuators}")
+    if kind not in VALID_KINDS:
+        raise ValueError(f"kind {kind!r} не из {VALID_KINDS}")
+    return {
+        "dimension": dim,
+        "kind": kind,
+        "predicate_name": canonical_predicate_name(dim),  # каноничное, не LLM-текст
+        "_llm_name": raw.get("predicate_name"),           # что предложил LLM (лог)
+        "rationale": raw.get("rationale", ""),
+    }
