@@ -1,0 +1,15 @@
+{
+  "_note": "Записанные LLM-предложения для ReplayProposer (offline-регрессия проводки, БЕЗ токенов). Живой пруф/фальсификатор берут реальные ответы Azure через LiveProposer. Ключ = symptom (из WorldModel.classify).",
+  "oom_killed": {
+    "dimension": "memory",
+    "kind": "ordered_monotone",
+    "predicate_name": "mem_ok",
+    "rationale": "container OOM-killed -> needs more memory; resource is ordered & monotone"
+  },
+  "unhealthy": {
+    "dimension": "config",
+    "kind": "categorical",
+    "predicate_name": "config_ok",
+    "rationale": "exit-code 3 sentinel -> bad config value; categorical knob, try alternatives"
+  }
+}
