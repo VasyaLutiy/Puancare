@@ -23,33 +23,34 @@ class SchemaProposer:
         self.n_calls = 0
         self.total_tokens = 0
 
-    def propose(self, symptom: str, ctx: dict, known_actuators: list[str]) -> dict:
+    def propose(self, symptom: str, ctx: dict, known_actuators: list) -> dict:
         raise NotImplementedError
 
 
 class LiveProposer(SchemaProposer):
     """
-    system = мета-грамматика + роль («предложи, какой рычаг разрешает симптом»);
-    user   = симптом + ctx + список known_actuators;
-    AzureJSON.ask(system, user, schema=PROPOSAL_SCHEMA) → dict; токены из _last_usage.
-    Затем validate_proposal(...). TODO(v3): порт паттерна Oracle.suggest_causes.
+    Живой Azure. system = мета-грамматика + роль; user = симптом+ctx+рычаги;
+    AzureJSON.ask(schema=PROPOSAL_SCHEMA) → dict; токены из _last_usage; validate_proposal.
+    TODO(v3): реализовать для harness_v3 (следующая сессия). Паттерн — Oracle.suggest_causes.
     """
     def __init__(self, env_path: str | None = None) -> None:
         super().__init__()
-        # TODO(v3): from utils_azure import AzureJSON; self._az = AzureJSON(env_path=env_path)
-        raise NotImplementedError("TODO(v3): LiveProposer.__init__")
+        raise NotImplementedError("TODO(v3): LiveProposer для harness_v3 (живой пруф)")
 
-    def propose(self, symptom: str, ctx: dict, known_actuators: list[str]) -> dict:
+    def propose(self, symptom: str, ctx: dict, known_actuators: list) -> dict:
         raise NotImplementedError("TODO(v3): LiveProposer.propose")
 
 
 class ReplayProposer(SchemaProposer):
-    """Читает записанные proposals.json. Токены не считает (n_calls растёт, tokens=0)."""
+    """Записанные ответы LLM (offline). n_calls растёт (для кривой), токены не считаются."""
     def __init__(self, path: str | None = None) -> None:
         super().__init__()
         with open(path or _FIXTURES) as f:
             self._table = json.load(f)
 
-    def propose(self, symptom: str, ctx: dict, known_actuators: list[str]) -> dict:
-        """TODO(v3): self.n_calls+=1; raw=self._table[symptom]; return validate_proposal(raw, known_actuators)."""
-        raise NotImplementedError("TODO(v3): ReplayProposer.propose")
+    def propose(self, symptom: str, ctx: dict, known_actuators: list) -> dict:
+        self.n_calls += 1
+        raw = self._table.get(symptom)
+        if raw is None:
+            raise KeyError(f"нет replay-фикстуры для симптома {symptom!r}")
+        return validate_proposal(raw, known_actuators)
