@@ -94,8 +94,12 @@ class Sandbox:
             print(f"  [pull] {self.image} ...", flush=True)
             _run(["docker", "pull", self.image], timeout=300)
 
-    def provision(self, name: str, mem=None, pool=None, config=None) -> Obs:
-        """Поднять контейнер сущности с knob'ами агента; вернуть Obs. Здоровая остаётся слушать."""
+    def provision(self, name: str, knobs: dict | None = None, **kw) -> Obs:
+        """Поднять контейнер с GENERIC-knob'ами агента {рычаг:значение}; вернуть Obs.
+        Песочница (=среда/платформа) знает СВОИ knob'ы (mem→--memory, pool/config→env);
+        агент их не знает — передаёт вслепую то, что выучил."""
+        knobs = {**(knobs or {}), **kw}
+        mem, pool, config = knobs.get("mem"), knobs.get("pool"), knobs.get("config")
         t = self.truth[name]
         c = self._c(name)
         _run(["docker", "rm", "-f", c])
