@@ -61,7 +61,8 @@ class Obs:
 
 
 def _run(args, timeout=30):
-    if args and args[0] == "docker":
+    # srv (ubuntu) не в группе docker → sudo; mac/Docker Desktop sudo НЕ нужен (контекст desktop-linux)
+    if args and args[0] == "docker" and sys.platform.startswith("linux"):
         args = ["sudo"] + args
     return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
 
