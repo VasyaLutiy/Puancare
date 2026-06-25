@@ -26,6 +26,7 @@ class TaskResult:
     llm_calls: int = 0
     refutes: int = 0
     error: str = ""
+    values: dict = field(default_factory=dict)   # выученные значения рычагов на момент успеха
 
 
 def _seed_graph(g: KnowledgeGraph, entity: str, goal_status: str) -> str:
@@ -101,6 +102,7 @@ def run_task(g, sandbox, proposer, entity, levers, defaults, goal_status="runnin
         if verbose:
             log(f"  try {dict((k, values[k]) for k in levers)} → {sym}")
         if sym == goal_status:
+            res.values = dict(values)
             return res
         if res.trials > max_trials:
             res.success = False; res.error = "max_trials"; return res
