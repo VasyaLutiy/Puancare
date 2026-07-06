@@ -35,6 +35,7 @@ LEGAL_EDGES = {
     (MT.INTERVENTION, Rel.REQUIRES, MT.SETTING),
     (MT.INTERVENTION, Rel.REQUIRES, MT.STATUS),
     (MT.INTERVENTION, Rel.USES, MT.ENTITY),
+    (MT.INTERVENTION, Rel.ACTS_ON, MT.ENTITY),
 }
 
 KINDS = {
@@ -105,8 +106,11 @@ def _law_lines():
 LAW_PROMPT = (
     "STRUCTURAL LAW (violations are rejected by a mechanical gate):\n"
     + "".join(f"  - {l}\n" for l in _law_lines())
-    + "  - intervention.requires = STATE preconditions only (resource/setting/status ids); "
-      "a TOOL/THING the action needs goes to intervention.uses (entity ids) — never into requires\n"
+    + "  - intervention role slots — distinguish THREE roles, never conflate: "
+      "acts_on = the PATIENT entity the action operates ON / changes (configure server -> server); "
+      "uses = the INSTRUMENT entity the action is done WITH (configure server with ansible -> ansible); "
+      "requires = STATE preconditions only (declared resource/setting/status ids). "
+      "The agent/doer and the audience are NOT slots — omit them\n"
       "  - every intervention MUST establish >=1 declared id (its effect; e.g. develop_cookbooks "
       "establishes cookbook_developed status)\n"
       "  - every resource/setting/status MUST carry \"entity\": <declared entity id> (its owner)\n"
@@ -123,9 +127,10 @@ META_SCHEMA = {
     "resources": "list of {id, entity, kind} kind='ordered'|'bounded' — quantitative adjustable properties",
     "settings": "list of {id, entity, kind} kind='categorical'|'boolean' — non-quantitative settings",
     "statuses": "list of {id, entity} — state axes (health/goal states) of a declared entity",
-    "interventions": ("list of {id, establishes, requires, uses} — actions; establishes/requires are "
-                      "lists of declared resource/setting/status ids; uses is a list of declared "
-                      "entity ids (tools/things the action needs)"),
+    "interventions": ("list of {id, establishes, requires, uses, acts_on} — actions; "
+                      "establishes/requires are lists of declared resource/setting/status ids; "
+                      "uses = declared entity ids the action is done WITH (instruments); "
+                      "acts_on = declared entity ids the action operates ON (patients)"),
     "dependencies": "list of {from, to} — entity 'from' depends on entity 'to'",
     "goal": "list of declared status ids that are the desired target (empty for a pure fact)",
     "constraints": ("list of {kind, members, bound} — logical layer: kind='mutex' (2 same-kind ids, "

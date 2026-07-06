@@ -1,14 +1,14 @@
-{"run": "dummies2-p000-048", "ts": "2026-07-06T21:23:44", "source": "eBook_DevOps_for-Dummies.md", "layer": "testimony", "new_nodes": 226, "bumped_nodes": 0, "new_edges": 221, "dup_edges": 0, "type_disputes": 0}
-{"run": "dummies2-p049-097", "ts": "2026-07-06T21:24:38", "source": "eBook_DevOps_for-Dummies.md", "layer": "testimony", "new_nodes": 236, "bumped_nodes": 31, "new_edges": 195, "dup_edges": 2, "type_disputes": 3}
-{"run": "dummies2-p098-146", "ts": "2026-07-06T21:25:01", "source": "eBook_DevOps_for-Dummies.md", "layer": "testimony", "new_nodes": 235, "bumped_nodes": 26, "new_edges": 241, "dup_edges": 0, "type_disputes": 5}
-{"run": "dummies2-p147-195", "ts": "2026-07-06T21:25:26", "source": "eBook_DevOps_for-Dummies.md", "layer": "testimony", "new_nodes": 300, "bumped_nodes": 52, "new_edges": 288, "dup_edges": 1, "type_disputes": 3}
-{"run": "dummies2-p196-225", "ts": "2026-07-06T21:25:42", "source": "eBook_DevOps_for-Dummies.md", "layer": "testimony", "new_nodes": 148, "bumped_nodes": 49, "new_edges": 165, "dup_edges": 0, "type_disputes": 1}
-{"run": "iac2-p000-048", "ts": "2026-07-06T21:26:05", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 236, "bumped_nodes": 29, "new_edges": 296, "dup_edges": 0, "type_disputes": 3}
-{"run": "iac2-p049-097", "ts": "2026-07-06T21:26:34", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 416, "bumped_nodes": 44, "new_edges": 438, "dup_edges": 0, "type_disputes": 7}
-{"run": "iac2-p098-146", "ts": "2026-07-06T21:27:02", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 367, "bumped_nodes": 84, "new_edges": 442, "dup_edges": 2, "type_disputes": 11}
-{"run": "iac2-p147-195", "ts": "2026-07-06T21:27:40", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 304, "bumped_nodes": 73, "new_edges": 395, "dup_edges": 4, "type_disputes": 6}
-{"run": "iac2-p196-244", "ts": "2026-07-06T21:28:07", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 280, "bumped_nodes": 74, "new_edges": 383, "dup_edges": 2, "type_disputes": 6}
-{"run": "iac2-p245-293", "ts": "2026-07-06T21:28:30", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 211, "bumped_nodes": 107, "new_edges": 346, "dup_edges": 3, "type_disputes": 15}
-{"run": "iac2-p294-342", "ts": "2026-07-06T21:28:56", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 302, "bumped_nodes": 120, "new_edges": 418, "dup_edges": 10, "type_disputes": 28}
-{"run": "iac2-p343-391", "ts": "2026-07-06T21:29:19", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 235, "bumped_nodes": 115, "new_edges": 352, "dup_edges": 20, "type_disputes": 24}
-{"run": "iac2-p392-402", "ts": "2026-07-06T21:29:24", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 0, "bumped_nodes": 0, "new_edges": 0, "dup_edges": 0, "type_disputes": 0}
+{"run": "dummies3-p000-048", "ts": "2026-07-06T21:50:10", "source": "eBook_DevOps_for-Dummies.md", "layer": "testimony", "new_nodes": 296, "bumped_nodes": 0, "new_edges": 271, "dup_edges": 0, "type_disputes": 5}
+{"run": "dummies3-p049-097", "ts": "2026-07-06T21:50:34", "source": "eBook_DevOps_for-Dummies.md", "layer": "testimony", "new_nodes": 285, "bumped_nodes": 45, "new_edges": 289, "dup_edges": 1, "type_disputes": 6}
+{"run": "dummies3-p098-146", "ts": "2026-07-06T21:51:00", "source": "eBook_DevOps_for-Dummies.md", "layer": "testimony", "new_nodes": 243, "bumped_nodes": 59, "new_edges": 287, "dup_edges": 3, "type_disputes": 12}
+{"run": "dummies3-p147-195", "ts": "2026-07-06T21:51:27", "source": "eBook_DevOps_for-Dummies.md", "layer": "testimony", "new_nodes": 383, "bumped_nodes": 87, "new_edges": 355, "dup_edges": 1, "type_disputes": 13}
+{"run": "dummies3-p196-225", "ts": "2026-07-06T21:51:42", "source": "eBook_DevOps_for-Dummies.md", "layer": "testimony", "new_nodes": 193, "bumped_nodes": 45, "new_edges": 203, "dup_edges": 1, "type_disputes": 7}
+{"run": "iac3-p000-048", "ts": "2026-07-06T21:52:08", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 257, "bumped_nodes": 48, "new_edges": 243, "dup_edges": 1, "type_disputes": 6}
+{"run": "iac3-p049-097", "ts": "2026-07-06T21:52:39", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 356, "bumped_nodes": 63, "new_edges": 336, "dup_edges": 4, "type_disputes": 8}
+{"run": "iac3-p098-146", "ts": "2026-07-06T21:53:12", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 354, "bumped_nodes": 89, "new_edges": 383, "dup_edges": 1, "type_disputes": 12}
+{"run": "iac3-p147-195", "ts": "2026-07-06T21:53:40", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 246, "bumped_nodes": 85, "new_edges": 238, "dup_edges": 3, "type_disputes": 14}
+{"run": "iac3-p196-244", "ts": "2026-07-06T21:54:09", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 279, "bumped_nodes": 92, "new_edges": 307, "dup_edges": 3, "type_disputes": 8}
+{"run": "iac3-p245-293", "ts": "2026-07-06T21:54:43", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 277, "bumped_nodes": 131, "new_edges": 310, "dup_edges": 12, "type_disputes": 17}
+{"run": "iac3-p294-342", "ts": "2026-07-06T21:55:14", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 312, "bumped_nodes": 131, "new_edges": 398, "dup_edges": 11, "type_disputes": 27}
+{"run": "iac3-p343-391", "ts": "2026-07-06T21:55:42", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 256, "bumped_nodes": 153, "new_edges": 325, "dup_edges": 10, "type_disputes": 29}
+{"run": "iac3-p392-402", "ts": "2026-07-06T21:55:48", "source": "IaC Thales.md", "layer": "testimony", "new_nodes": 0, "bumped_nodes": 0, "new_edges": 0, "dup_edges": 0, "type_disputes": 0}

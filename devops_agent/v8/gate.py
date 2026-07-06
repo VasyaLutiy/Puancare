@@ -73,6 +73,9 @@ def to_graph(meta: dict) -> tuple:
         for ref in iv.get("uses") or []:
             if str(ref):
                 g.add_edge(iid, Rel.USES, str(ref))
+        for ref in iv.get("acts_on") or []:
+            if str(ref):
+                g.add_edge(iid, Rel.ACTS_ON, str(ref))
     for d in _items(meta, "dependencies"):
         f, t = str(d.get("from", "")), str(d.get("to", ""))
         if f and t:

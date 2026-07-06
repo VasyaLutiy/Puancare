@@ -218,7 +218,7 @@ def _mermaid(kb, top=40):
     shape = {"entity": ("[", "]"), "resource": ("([", "])"), "setting": ("{{", "}}"),
              "status": ("((", "))"), "intervention": (">", "]")}
     arrow = {"dependency": "-->", "depends_on": "-->", "establishes": "==>",
-             "requires": "-.->", "uses": "-.->", "has": "---", "has_status": "---",
+             "requires": "-.->", "uses": "-.->", "acts_on": "==>", "has": "---", "has_status": "---",
              "mutex": "<-. mutex .->", "atmost": "<-. atmost .->"}
     print("graph LR")
     for nid in sorted(keep):

@@ -53,6 +53,7 @@ def think(goal: str, max_depth: int = 4):
     estab = {}                                       # to -> [интервенции]
     reqs = {}                                        # intervention -> [предусловия-состояния]
     uses = {}                                        # intervention -> [инструменты-entity]
+    acts = {}                                        # intervention -> [patient-entity]
     deps = {}                                        # from -> [to]
     cons = {}                                        # узел -> [(kind, другой)]
     for e in kb["edges"].values():
@@ -62,6 +63,8 @@ def think(goal: str, max_depth: int = 4):
             reqs.setdefault(e["from"], []).append(e)
         elif e["kind"] == "uses":
             uses.setdefault(e["from"], []).append(e)
+        elif e["kind"] == "acts_on":
+            acts.setdefault(e["from"], []).append(e)
         elif e["kind"] in ("dependency", "depends_on"):     # v1/v2 словари
             deps.setdefault(e["from"], []).append(e)
         elif e["kind"] in ("mutex", "atmost"):
@@ -90,6 +93,8 @@ def think(goal: str, max_depth: int = 4):
             iv = e["from"]
             chunks.append(f"[{len(chunks)}] {pad}чтобы получить {x} — есть действие {iv} "
                           f"({_mark(e)}, freq={e['freq']})")
+            for a in sorted(acts.get(iv, []), key=lambda e: -e["freq"])[:2]:
+                chunks.append(f"[{len(chunks)}] {pad}  {iv} совершается НАД {a['to']} ({_mark(a)})")
             for u in sorted(uses.get(iv, []), key=lambda e: -e["freq"])[:3]:
                 chunks.append(f"[{len(chunks)}] {pad}  {iv} использует инструмент {u['to']} "
                               f"({_mark(u)}; проба: уронить {u['to']} и смотреть)")

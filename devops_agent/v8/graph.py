@@ -40,7 +40,9 @@ class Rel(str, Enum):
     DEPENDS_ON = "depends_on"    # entity → entity (единственный потребитель — топосорт)
     ESTABLISHES = "establishes"  # intervention → resource/setting/status (эффект)
     REQUIRES = "requires"        # intervention → resource/setting/status (предусловие-состояние)
-    USES = "uses"                # intervention → entity (инструмент; проба: уронить и смотреть)
+    USES = "uses"                # intervention → entity (инструмент, «ЧЕМ»; проба: уронить и смотреть)
+    ACTS_ON = "acts_on"          # intervention → entity (patient, «НАД ЧЕМ»; введено 7 июл:
+                                 #   ручная разметка n=20 показала 60% объектов в uses-ведре)
 
 
 @dataclass
