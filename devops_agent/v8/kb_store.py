@@ -217,7 +217,8 @@ def _mermaid(kb, top=40):
     keep = {n["id"] for n in sorted(kb["nodes"].values(), key=lambda x: -x["freq"])[:top]}
     shape = {"entity": ("[", "]"), "resource": ("([", "])"), "setting": ("{{", "}}"),
              "status": ("((", "))"), "intervention": (">", "]")}
-    arrow = {"dependency": "-->", "establishes": "==>", "requires": "-.->",
+    arrow = {"dependency": "-->", "depends_on": "-->", "establishes": "==>",
+             "requires": "-.->", "uses": "-.->", "has": "---", "has_status": "---",
              "mutex": "<-. mutex .->", "atmost": "<-. atmost .->"}
     print("graph LR")
     for nid in sorted(keep):

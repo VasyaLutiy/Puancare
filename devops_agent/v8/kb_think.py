@@ -51,7 +51,8 @@ def think(goal: str, max_depth: int = 4):
         chunks.append(f"[·] уточнил цель: «{goal}» → {nid} (рядом были: {', '.join(near)})")
 
     estab = {}                                       # to -> [интервенции]
-    reqs = {}                                        # intervention -> [требования]
+    reqs = {}                                        # intervention -> [предусловия-состояния]
+    uses = {}                                        # intervention -> [инструменты-entity]
     deps = {}                                        # from -> [to]
     cons = {}                                        # узел -> [(kind, другой)]
     for e in kb["edges"].values():
@@ -59,7 +60,9 @@ def think(goal: str, max_depth: int = 4):
             estab.setdefault(e["to"], []).append(e)
         elif e["kind"] == "requires":
             reqs.setdefault(e["from"], []).append(e)
-        elif e["kind"] == "dependency":
+        elif e["kind"] == "uses":
+            uses.setdefault(e["from"], []).append(e)
+        elif e["kind"] in ("dependency", "depends_on"):     # v1/v2 словари
             deps.setdefault(e["from"], []).append(e)
         elif e["kind"] in ("mutex", "atmost"):
             cons.setdefault(e["from"], []).append((e["kind"], e["to"]))
@@ -87,8 +90,11 @@ def think(goal: str, max_depth: int = 4):
             iv = e["from"]
             chunks.append(f"[{len(chunks)}] {pad}чтобы получить {x} — есть действие {iv} "
                           f"({_mark(e)}, freq={e['freq']})")
+            for u in sorted(uses.get(iv, []), key=lambda e: -e["freq"])[:3]:
+                chunks.append(f"[{len(chunks)}] {pad}  {iv} использует инструмент {u['to']} "
+                              f"({_mark(u)}; проба: уронить {u['to']} и смотреть)")
             for r in sorted(reqs.get(iv, []), key=lambda e: -e["freq"])[:3]:
-                chunks.append(f"[{len(chunks)}] {pad}  {iv} требует {r['to']} → хочу {r['to']}")
+                chunks.append(f"[{len(chunks)}] {pad}  {iv} требует состояния {r['to']} → хочу {r['to']}")
                 want(r["to"], depth + 2)
         for e in sorted(deps.get(x, []), key=lambda e: -e["freq"])[:2]:
             acted = True

@@ -1,136 +1,215 @@
 """
-gate.py — КОНТРАКТ-ГЕЙТ между NLU-компилятором и meta-KB.
+gate.py — v8 ГЕЙТ: единственная дверь между NLU-компилятором и KB.
 
-Переиспускает meta-JSON компилятора в v4.KnowledgeGraph и валидирует ровно через
-v4/contract.py (легальные рёбра 6 мета-типов + узловые инварианты). Малформ → ретрай:
-нарушения прокидываются обратно компилятору, он чинит. В KB ложится только структурно-чистое.
+Переписан заново 6 июл (решение Кирилла: не тянуть v4) после того, как книжный
+пайплайн дважды прошёл МИМО гейта и 74% мет легли в KB беззаконными.
 
-Так первый слой ground-truth (структура), который мы пропустили, встаёт на место —
-семантику (судью) меряем уже на валидных графах.
+  meta-JSON → to_graph() → contract.validate()
+     ├─ mode='quarantine' (массовое чтение книг, НОЛЬ LLM):
+     │    детерминированное отмывание: requires→entity переезжает в USES (закон),
+     │    незаконное отрезается и СЧИТАЕТСЯ (residue — сырьё для роста ISA);
+     │    на выходе граф, чистый по построению.
+     └─ mode='repair' (задачи, дорого): нарушения прокидываются обратно
+          компилятору (LAW_PROMPT), он чинит; остаток — в карантин.
+
+В KB ложится ТОЛЬКО то, что прошло гейт. Residue не мусор: mutex/atmost выросли
+ровно из residue старого гейта; part-of (кейс Chef) — следующий кандидат.
 """
 
+from __future__ import annotations
+
 import json
-import sys
-from pathlib import Path
+from collections import Counter
 
-from devops_agent.v4 import contract as v4c
-from devops_agent.v4.graph import KnowledgeGraph, MetaType, Rel
-from devops_agent.v8.metagen import META_SCHEMA, COMPILER_SYS
-from utils_azure import AzureJSON
+from devops_agent.v8.constraints import AtMost, ConstraintLayer, Mutex
+from devops_agent.v8.contract import LAW_PROMPT, META_SCHEMA, validate
+from devops_agent.v8.graph import KnowledgeGraph, MetaType as MT, Rel
 
-DS = Path(__file__).resolve().parent / "datasets" / "tasks.jsonl"
 
-FIX_SYS = COMPILER_SYS + (
-    " Your previous structure FAILED the structural contract. Re-emit CORRECTED JSON obeying: "
-    "(1) every id in intervention.establishes/requires, dependencies and goal must be DECLARED "
-    "as an entity/resource/setting/status; (2) entity field of resource/setting/status must be a "
-    "DECLARED entity id; (3) dependency.from and .to must both be ENTITY ids; (4) entities are "
-    "objects {id}; (5) every intervention must establish at least one thing; (6) resource.kind in "
-    "[ordered,bounded], setting.kind in [categorical,boolean]. Fix exactly the listed violations."
+# ---------------------------- meta-JSON → граф ----------------------------------
+
+def _items(meta, key):
+    for x in meta.get(key) or []:
+        if isinstance(x, dict):
+            yield x
+        elif isinstance(x, str):
+            yield {"id": x}
+
+
+def to_graph(meta: dict) -> tuple:
+    """meta-JSON → (KnowledgeGraph, build-нарушения, которых граф не выражает)."""
+    g, bv = KnowledgeGraph(), []
+
+    def node(nid, mt, **attrs):
+        if not isinstance(nid, str) or not nid:
+            bv.append(f"пустой-id:{mt.value}")
+            return None
+        try:
+            g.add_node(nid, mt, **attrs)
+            return nid
+        except ValueError:
+            bv.append(f"id-коллизия:{nid}")
+            return None
+
+    for e in _items(meta, "entities"):
+        node(str(e.get("id", "")), MT.ENTITY)
+    for key, mt, rel in (("resources", MT.RESOURCE, Rel.HAS),
+                         ("settings", MT.SETTING, Rel.HAS),
+                         ("statuses", MT.STATUS, Rel.HAS_STATUS)):
+        for r in _items(meta, key):
+            nid = node(str(r.get("id", "")), mt, **({"kind": r["kind"]} if r.get("kind") else {}))
+            if nid and r.get("entity"):
+                g.add_edge(str(r["entity"]), rel, nid)
+    for iv in _items(meta, "interventions"):
+        iid = node(str(iv.get("id", "")), MT.INTERVENTION)
+        if not iid:
+            continue
+        for ref in iv.get("establishes") or []:
+            if str(ref):
+                g.add_edge(iid, Rel.ESTABLISHES, str(ref))
+        for ref in iv.get("requires") or []:
+            if str(ref):
+                g.add_edge(iid, Rel.REQUIRES, str(ref))
+        for ref in iv.get("uses") or []:
+            if str(ref):
+                g.add_edge(iid, Rel.USES, str(ref))
+    for d in _items(meta, "dependencies"):
+        f, t = str(d.get("from", "")), str(d.get("to", ""))
+        if f and t:
+            g.add_edge(f, Rel.DEPENDS_ON, t)
+    g.goal = [str(x) for x in meta.get("goal") or [] if str(x)]
+    for c in meta.get("constraints") or []:
+        mem = tuple(str(m) for m in (c.get("members") or []))
+        if c.get("kind") == "mutex":
+            g.layer.mutexes.append(Mutex(members=mem))
+        elif c.get("kind") == "atmost":
+            try:
+                g.layer.atmosts.append(AtMost(members=mem, bound=int(c.get("bound", 0))))
+            except (TypeError, ValueError):
+                bv.append(f"atmost-bad-bound:{c.get('bound')}")
+    return g, bv
+
+
+# ---------------------------- карантин (механика, 0 LLM) ------------------------
+
+def quarantine(g: KnowledgeGraph) -> Counter:
+    """Детерминированное отмывание до законного графа. Возвращает residue-счётчик.
+
+    Порядок важен: сначала законные ПЕРЕКЛАССИФИКАЦИИ, потом отрезание, потом
+    каскад (сирота → отрезать её рёбра) до фикспойнта.
+    """
+    res = Counter()
+
+    # 1) requires→entity — это USES по закону (инструмент). Переклассификация, не потеря.
+    moved = []
+    for e in list(g.edges):
+        if (e.rel == Rel.REQUIRES and e.src in g.nodes and e.dst in g.nodes
+                and g.nodes[e.dst].mtype == MT.ENTITY):
+            g.edges.remove(e)
+            g.add_edge(e.src, Rel.USES, e.dst)
+            moved.append(e)
+    res["requires→uses (переклассифицировано)"] = len(moved)
+
+    # 2) establishes→entity: «действие создаёт вещь» — невыразимо (кандидат CREATES). Резать.
+    for e in list(g.edges):
+        if (e.rel == Rel.ESTABLISHES and e.dst in g.nodes
+                and g.nodes[e.dst].mtype == MT.ENTITY):
+            g.edges.remove(e)
+            res["residue: establishes→entity (кандидат CREATES)"] += 1
+
+    # 3) фикспойнт отрезаний
+    changed = True
+    while changed:
+        changed = False
+        # рёбра: висячие или нелегальные по сигнатуре
+        for e in list(g.edges):
+            if e.src not in g.nodes or e.dst not in g.nodes:
+                g.edges.remove(e); res["residue: висячее ребро"] += 1; changed = True
+                continue
+            sig = (g.nodes[e.src].mtype, e.rel, g.nodes[e.dst].mtype)
+            from devops_agent.v8.contract import LEGAL_EDGES
+            if sig not in LEGAL_EDGES:
+                g.edges.remove(e)
+                res[f"residue: {sig[0].value}-{sig[1].value}->{sig[2].value}"] += 1
+                changed = True
+        # узлы: безхозные resource/setting/status; интервенции без эффекта
+        for n in list(g.nodes.values()):
+            if n.mtype in (MT.RESOURCE, MT.SETTING) and not g.has_incoming(n.id, Rel.HAS):
+                g.drop_node(n.id); res[f"residue: безхозный {n.mtype.value}"] += 1; changed = True
+            elif n.mtype == MT.STATUS and not g.has_incoming(n.id, Rel.HAS_STATUS):
+                g.drop_node(n.id); res["residue: status без entity"] += 1; changed = True
+            elif n.mtype == MT.INTERVENTION and not g.out(n.id, Rel.ESTABLISHES):
+                g.drop_node(n.id); res["residue: intervention без эффекта"] += 1; changed = True
+        # kind-мусор → снять атрибут (узел законен без kind? нет: kind обязателен смыслом,
+        # но контракт ругает только нелегальный kind; неизвестный снимаем)
+        for n in g.nodes.values():
+            k = n.attrs.get("kind")
+            if k is not None and n.mtype in (MT.RESOURCE, MT.SETTING):
+                from devops_agent.v8.contract import KINDS
+                if k not in KINDS[n.mtype]:
+                    n.attrs.pop("kind"); res["residue: нелегальный kind (снят)"] += 1
+    # 4) цель: только объявленные статусы
+    st = g.ids_of(MT.STATUS)
+    bad_goal = [x for x in g.goal if x not in st]
+    if bad_goal:
+        g.goal = [x for x in g.goal if x in st]
+        res["residue: goal-не-status"] += len(bad_goal)
+    # 5) связки: незаконные — в residue
+    from devops_agent.v8.constraints import validate_constraints
+    viol = validate_constraints(g.layer, g.ids_of(MT.RESOURCE), st, g.ids_of(MT.SETTING))
+    if viol:
+        keep_m, keep_a = [], []
+        for m in g.layer.mutexes:
+            l = ConstraintLayer(mutexes=[m])
+            if not validate_constraints(l, g.ids_of(MT.RESOURCE), st, g.ids_of(MT.SETTING)):
+                keep_m.append(m)
+            else:
+                res["residue: незаконный mutex"] += 1
+        for a in g.layer.atmosts:
+            l = ConstraintLayer(atmosts=[a])
+            if not validate_constraints(l, g.ids_of(MT.RESOURCE), st, g.ids_of(MT.SETTING)):
+                keep_a.append(a)
+            else:
+                res["residue: незаконный atmost"] += 1
+        g.layer.mutexes, g.layer.atmosts = keep_m, keep_a
+    return res
+
+
+# ---------------------------- repair (LLM-ретрай) --------------------------------
+
+FIX_SYS_TAIL = (
+    "\nYour previous structure FAILED the structural law above. Re-emit CORRECTED JSON "
+    "fixing exactly the listed violations. Keep everything that was already legal."
 )
 
 
-def to_graph(meta: dict):
-    """meta-JSON → v4.KnowledgeGraph (+ нарушения сборки, которых граф не выражает)."""
-    g, build_v = KnowledgeGraph(), []
-
-    def node(nid, mt):
-        if not isinstance(nid, str) or not nid:
-            build_v.append(f"пустой id у {mt.value}")
-            return
-        try:
-            g.add_node(nid, mt)
-        except ValueError as e:
-            build_v.append(f"id-коллизия: {e}")
-
-    for e in meta.get("entities", []):
-        if isinstance(e, dict):
-            node(e.get("id"), MetaType.ENTITY)
-        else:
-            node(e, MetaType.ENTITY)
-            build_v.append("entity-строкой, не {id}")
-    for r in meta.get("resources", []):
-        node(r.get("id"), MetaType.RESOURCE)
-        if r.get("kind") not in ("ordered", "bounded"):
-            build_v.append(f"resource-bad-kind:{r.get('kind')}")
-        if r.get("entity"):
-            g.add_edge(r["entity"], Rel.HAS, r.get("id"))
-    for s in meta.get("settings", []):
-        node(s.get("id"), MetaType.SETTING)
-        if s.get("kind") not in ("categorical", "boolean"):
-            build_v.append(f"setting-bad-kind:{s.get('kind')}")
-        if s.get("entity"):
-            g.add_edge(s["entity"], Rel.HAS, s.get("id"))
-    for s in meta.get("statuses", []):
-        node(s.get("id"), MetaType.STATUS)
-        if s.get("entity"):
-            g.add_edge(s["entity"], Rel.HAS_GOAL, s.get("id"))
-        else:
-            build_v.append(f"status без entity: {s.get('id')!r}")
-    for iv in meta.get("interventions", []):
-        node(iv.get("id"), MetaType.INTERVENTION)
-        for ref in iv.get("establishes", []):
-            g.add_edge(iv.get("id"), Rel.ESTABLISHES, ref)
-        for ref in iv.get("requires", []):
-            g.add_edge(iv.get("id"), Rel.REQUIRES, ref)
-    for d in meta.get("dependencies", []):
-        if d.get("from") and d.get("to"):
-            g.add_edge(d["from"], Rel.DEPENDS_ON, d["to"])
-    return g, build_v
-
-
-def validate_meta(meta: dict) -> list:
-    g, build_v = to_graph(meta)
-    return build_v + v4c.validate(g)
-
-
-def repair(human: str, meta: dict, az: AzureJSON, max_fix: int = 2):
-    """Ретрай: прокидываем нарушения компилятору, пока не чисто или не исчерпан лимит."""
-    viol = validate_meta(meta)
+def repair(human: str, meta: dict, az, compiler_sys: str, max_fix: int = 2):
+    """Нарушения → обратно компилятору. Возвращает (meta, попыток, остаток нарушений)."""
+    g, bv = to_graph(meta)
+    viol = bv + validate(g)
     attempts = 0
     while viol and attempts < max_fix:
-        meta = az.ask(system=FIX_SYS,
+        meta = az.ask(system=compiler_sys + "\n" + LAW_PROMPT + FIX_SYS_TAIL,
                       user=f"human: {human}\nprevious: {json.dumps(meta, ensure_ascii=False)}\n"
-                           f"violations: {sorted(set(viol))}",
+                           f"violations: {sorted(set(viol))[:20]}",
                       schema=META_SCHEMA)
         attempts += 1
-        viol = validate_meta(meta)
+        g, bv = to_graph(meta)
+        viol = bv + validate(g)
     return meta, attempts, sorted(set(viol))
 
 
-def main() -> None:
-    cap = int(sys.argv[1]) if len(sys.argv) > 1 else 10
-    rows = [json.loads(l) for l in DS.open()]
-    clean0 = [r for r in rows if not validate_meta(r["meta"])]
-    dirty = [r for r in rows if validate_meta(r["meta"])]
-    print(f"в meta-KB сейчас: чистых {len(clean0)}/{len(rows)}, малформ {len(dirty)}")
-    print(f"прогоняю гейт (ретрай) на {min(cap, len(dirty))} малформ-графах из {len(dirty)}:\n")
+# ---------------------------- единая дверь ---------------------------------------
 
-    az = AzureJSON()
-    fixed = irreparable = 0
-    residue = {}
-    for r in dirty[:cap]:
-        before = sorted(set(validate_meta(r["meta"])))
-        meta2, att, after = repair(r["human"], r["meta"], az)
-        ok = not after
-        fixed += ok
-        irreparable += (not ok)
-        tag = "ПОЧИНЕН" if ok else "НЕ ЧИНИТСЯ"
-        print(f"  [{tag} за {att}] {r['human'][:70]}")
-        print(f"      было: {before}")
-        if not ok:
-            print(f"      осталось: {after}")
-            for x in after:
-                residue[x] = residue.get(x, 0) + 1
-    print(f"\nна выборке: починено {fixed}, не чинится {irreparable}")
-    if residue:
-        print("неустранимый остаток (кандидаты в дыры схемы E4/E5):")
-        for x, c in sorted(residue.items(), key=lambda kv: -kv[1]):
-            print(f"  {c}  {x}")
-    proj = len(clean0) + round(len(dirty) * (fixed / max(1, fixed + irreparable)))
-    print(f"\nпроекция на все 100 после гейта: ~{proj}/100 чистых "
-          f"(было {len(clean0)}); остальное — на ретрай/в карантин как находки.")
-
-
-if __name__ == "__main__":
-    main()
+def gate_meta(meta: dict, mode: str = "quarantine", az=None, human: str = "",
+              compiler_sys: str = "") -> tuple:
+    """meta → (законный KnowledgeGraph, report). Единственный вход в KB."""
+    if mode == "repair" and az is not None:
+        meta, attempts, left = repair(human, meta, az, compiler_sys)
+    g, bv = to_graph(meta)
+    res = quarantine(g)
+    for b in bv:
+        res[f"build: {b.split(':')[0]}"] += 1
+    leftover = validate(g)
+    assert not leftover, f"гейт пропустил незаконное: {leftover[:5]}"   # чистота по построению
+    return g, res
