@@ -89,6 +89,7 @@ TRAP_RE = re.compile(r"^если\s+(\S+?)=(\S+)\s+то\s+(\S+?)=(\S+)\s+\((\d+)%
 GUAR_RE = re.compile(r"^минимум\s+(\d+)\s+объект\w*\s+с\s+(\S+?)=(\S+)$")
 LINK_RE = re.compile(r"^(\d+)(?:\s*\((\S+?)=(\S+)\))?$")
 EXAM_RE = re.compile(r"^зонд\s+(\S+)\s+вопрос\s+(\S+?)(\s+с\s+откатом)?$")
+DYN_RE  = re.compile(r"^если\s+(\S+?)=(\S+)\s+то\s+шанс_стать\s+(\S+)\s+\((\d+)%\)$")
 EFFECTS = ("исчезает", "каскад", "починка")
 
 
@@ -229,6 +230,24 @@ class Spec:
                     f"(если повтор зонда откатывает) или выбери безопасный")
             self.exams.append((f"{probe}->{ask}", probe, ask, undo))
 
+        self.dynamics = []
+        dyn = raw.get("динамика") or {}
+        for rule in (dyn.get("каждый_шаг") or []):
+            m = DYN_RE.match(rule)
+            if not m:
+                raise ValueError(
+                    f"динамика {rule!r}: жду "
+                    f"'если attr=from то шанс_стать to (p%)'")
+            attr, from_val, to_val, pct = (m.group(1), m.group(2),
+                                           m.group(3), int(m.group(4)))
+            if attr not in self.hidden:
+                raise ValueError(f"динамика: {attr!r} — только скрытые атрибуты")
+            for v in (from_val, to_val):
+                if v not in self.attrs[attr]:
+                    raise ValueError(
+                        f"динамика: {v!r} не объявлено у атрибута {attr!r}")
+            self.dynamics.append((attr, from_val, to_val, pct / 100))
+
 
 def load_spec(path):
     with open(path, encoding="utf-8") as fh:
@@ -312,9 +331,20 @@ class GenericWorld:
 
     # ------------------------------------------------------------- шаг
 
+    def _tick(self):
+        for obj in self.objects.values():
+            mutations = {}
+            for attr, from_val, to_val, prob in self.spec.dynamics:
+                if attr not in mutations and obj.get(attr) == from_val:
+                    if self._rng.random() < prob:
+                        mutations[attr] = to_val
+            obj.update(mutations)
+
     def step(self, action, target=None, **kw):
         before = self.observe()
         result, effects = self._apply(action, target, kw)
+        if self.spec.dynamics:
+            self._tick()
         return {"obs": before, "action": action, "target": target, "args": kw,
                 "result": result, "effects": effects,
                 "obs_after": self.observe()}

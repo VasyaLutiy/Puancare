@@ -35,6 +35,7 @@ BASKETS = ("basket_a", "basket_b", "neutral")
 COLORS = ("red", "gray", "white")
 PILE_ACTIONS = ("split_evenly", "pair_up", "make_rectangle", "share", "dump")
 SCALE_ACTIONS = ("check", "fix")
+MUTATE_ACTIONS = ("add_pebble", "remove_pebble")
 
 
 def is_prime(n):

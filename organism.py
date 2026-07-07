@@ -20,7 +20,10 @@ from memory import EP_COST, RULE_BASE, RULE_COND, Memory
 
 SLEEP_EVERY = 100
 INVENT_AT = 5
-MIN_CO = 3      # минимум со-наблюдений для вывода о корреляции симптомов
+MIN_CO = 3           # минимум со-наблюдений для вывода о корреляции симптомов
+FUNC_THRESHOLD = 0.65  # A6: 65% доминирование достаточно — мир динамичен
+FRESHNESS = 5        # A6: устаревшее наблюдение в динамическом мире = снова граница
+CLASS_PENALTY = 10.0 # A6: штраф за каждую лишнюю скрытую переменную — экономия онтологии
 
 
 def cluster_signatures(sigs):
@@ -45,6 +48,19 @@ def _functional(pairs):
     return True
 
 
+def _functional_prob(pairs, threshold=FUNC_THRESHOLD):
+    """A6: x → y доминирует в порог% случаев (терпим к динамическому шуму)."""
+    by_x = {}
+    for x, y in pairs:
+        by_x.setdefault(x, {})
+        by_x[x][y] = by_x[x].get(y, 0) + 1
+    for counts in by_x.values():
+        total = sum(counts.values())
+        if max(counts.values()) / total < threshold:
+            return False
+    return True
+
+
 class Organism:
     def __init__(self, curious, object_actions, ctx_fn, truth_fn=None,
                  entities_fn=None, seed=0):
@@ -63,6 +79,7 @@ class Organism:
         self.tried = set()
         self.R = set()            # связи: (obj, сущность, её живое состояние)
         self.steps = 0
+        self._dyn = False         # A6: обнаружили что мир меняется под ногами
 
     # ---- понятия ----
 
@@ -70,7 +87,7 @@ class Organism:
         """Значения всех изобретённых переменных для объекта (если выводимы)."""
         out = {}
         for g in self.groups:
-            s = {a: r for a, r in self.sig.get(obj, {}).items()
+            s = {a: r for a, (r, _t) in self.sig.get(obj, {}).items()
                  if a in g["actions"]}
             for k, (msig, _) in enumerate(g["clusters"]):
                 shared = set(s) & set(msig)
@@ -140,6 +157,11 @@ class Organism:
                             and any(a not in self.sig.get(obj, {})
                                     for a in g["actions"])):
                         return True
+        # A6: в динамическом мире устаревшее наблюдение нужно освежить
+        if (self._dyn and obj is not None
+                and action in self.sig.get(obj, {})
+                and self.steps - self.sig[obj][action][1] > FRESHNESS):
+            return True
         if (ctx, action) in self.tried:
             return False
         return self.mem.predict(ctx, action) is None
@@ -170,7 +192,10 @@ class Organism:
                              "ents": ents, "effects": tr["effects"]})
         self.tried.add((ctx_now, a))
         if obj:
-            self.sig[obj].setdefault(a, outcome[0])
+            prev = self.sig[obj].get(a)
+            if prev is not None and prev[0] != outcome[0]:
+                self._dyn = True   # A6: то же действие — другой результат → мир меняется
+            self.sig[obj][a] = (outcome[0], self.steps)  # A6: (результат, шаг)
         self.steps += 1
         if self.steps % SLEEP_EVERY == 0:
             self.sleep()
@@ -192,8 +217,11 @@ class Organism:
             r = mem.predict(ctx, a)
             if r is None or r["outcome"] != o:
                 bad += 1
+        n_class_vars = len({att for r in mem.rules
+                            for att, _ in r["conds"] if att.startswith("class")})
         return (sum(RULE_BASE + RULE_COND * len(r["conds"]) for r in mem.rules)
-                + bad * EP_COST)
+                + bad * EP_COST
+                + n_class_vars * CLASS_PENALTY)  # A6: меньше переменных — лучше
 
     def _residue(self):
         return [r for r in self.records
@@ -215,10 +243,12 @@ class Organism:
 
         for i, a in enumerate(acts):
             for b in acts[i + 1:]:
-                pairs = [(s[a], s[b]) for s in self.sig.values()
-                         if a in s and b in s]
-                if (len(pairs) >= MIN_CO and _functional(pairs)
-                        and _functional([(y, x) for x, y in pairs])):
+                pairs = [(ra, rb)
+                         for s in self.sig.values()
+                         if a in s and b in s
+                         for (ra, _ta), (rb, _tb) in [(s[a], s[b])]]
+                if (len(pairs) >= MIN_CO and _functional_prob(pairs)
+                        and _functional_prob([(y, x) for x, y in pairs])):
                     parent[find(b)] = find(a)
 
         by_root = defaultdict(set)
@@ -227,7 +257,7 @@ class Organism:
         groups = []
         for root in sorted(by_root):
             gacts = by_root[root]
-            sigs = {o: {a: r for a, r in s.items() if a in gacts}
+            sigs = {o: {a: r for a, (r, _t) in s.items() if a in gacts}
                     for o, s in self.sig.items()}
             clusters = cluster_signatures(
                 {o: s for o, s in sigs.items() if s})
@@ -237,6 +267,19 @@ class Organism:
         return groups
 
     def sleep(self):
+        # A6: сканируем записи — если один объект при одном действии дал два
+        # разных результата, мир точно динамический
+        if not self._dyn:
+            seen = {}
+            for r in self.records:
+                if not r["obj"]:
+                    continue
+                key = (r["obj"], r["action"])
+                res = r["outcome"][0]
+                if key in seen and seen[key] != res:
+                    self._dyn = True
+                    break
+                seen[key] = res
         self.mem = self._relabel()
         residue = self._residue()
         uniq = {(r["ctx"], r["action"], r["outcome"]) for r in residue}
@@ -255,6 +298,17 @@ class Organism:
                 self.mem = cand
             else:
                 self.problem_actions, self.groups, self.mem = old
+        elif self.problem_actions:
+            # A6: даже при малом остатке — перебалансируем топологию групп,
+            # накопленных ранее (свежих пар могло стать больше)
+            old = (self.groups, self.mem)
+            old_dl = self._dl(self.mem)
+            self.groups = self._factor_groups()
+            cand = self._relabel()
+            if self._dl(cand) < old_dl:
+                self.mem = cand
+            else:
+                self.groups, self.mem = old
         # реляционная абдукция (B3, k=2) — под тем же стражем
         cand_R = set()
         for r in self.records:
