@@ -140,8 +140,13 @@ if __name__ == "__main__":
     if len(sys.argv) != 2:
         print(__doc__)
         sys.exit(2)
-    mod = importlib.import_module(sys.argv[1])
-    glue, exams = mod.GLUE, mod.EXAMS
+    if sys.argv[1].endswith((".yaml", ".yml")):
+        from worldkit import load_spec, make_glue
+        glue = make_glue(load_spec(sys.argv[1]))
+        exams = glue["exams"]
+    else:
+        mod = importlib.import_module(sys.argv[1])
+        glue, exams = mod.GLUE, mod.EXAMS
 
     print("Проверки протокола:")
     check_protocol(glue)
