@@ -128,7 +128,7 @@ def exam_scores(org, glue, exams):
                 ctx = ctx | {inferred}
             if org.R:
                 ctx = ctx | {("linked_live", 0)}
-            r = org.mem.predict(ctx, ask)
+            r = org.mem.answer(ctx, ask)
             pred = r["outcome"][0] if r else None
             score += pred == w.step(ask, name)["result"]
             total += 1

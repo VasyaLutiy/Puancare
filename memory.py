@@ -128,6 +128,49 @@ class Memory:
             return None
         return max(matching, key=lambda r: (len(r["conds"]), r["support"]))
 
+    # ---------- ответ со смирением ----------
+
+    def _relevant_attrs(self):
+        """Атрибуты, которые теория считает значимыми (есть хоть в одном
+        правиле). Шум, выброшенный прессом из правил, не должен пугать
+        ответчик при поиске свидетелей."""
+        return {att for r in self.rules for att, _ in r["conds"]}
+
+    @staticmethod
+    def _conflict(ctx_a, ctx_b, relevant):
+        d = dict(ctx_a)
+        return any(a in d and d[a] != v
+                   for a, v in ctx_b if a in relevant)
+
+    def supported(self, ctx, action, rule):
+        """Есть ли у правила свидетель (эпизод, породивший его),
+        совместимый с запросом по всем значимым атрибутам. Если нет —
+        правило в этой точке экстраполирует, а не знает."""
+        relevant = self._relevant_attrs()
+        for (e_ctx, a, o) in self.episodes:
+            if (a == action and o == rule["outcome"]
+                    and rule["conds"] <= e_ctx
+                    and not self._conflict(e_ctx, ctx, relevant)):
+                return True
+        return False
+
+    def answer(self, ctx, action):
+        """Эпистемически честный ответ (долг раунда ores):
+        1) точное воспоминание побеждает правило;
+        2) правило отвечает только внутри области своих свидетелей;
+        3) иначе None — "не знаю" вместо уверенной экстраполяции.
+        Внутренняя машинерия (остаток, MDL, изобретение) продолжает
+        пользоваться голым predict — иначе зубрёжка убьёт давление."""
+        exact = {o for (c, a, o) in self.episodes
+                 if a == action and c == ctx}
+        if len(exact) == 1:
+            return {"action": action, "conds": ctx, "outcome": exact.pop(),
+                    "support": 1, "exceptions": 0, "episodic": True}
+        r = self.predict(ctx, action)
+        if r is None or not self.supported(ctx, action, r):
+            return None
+        return r
+
     # ---------- инспекция глазами ----------
 
     def dump(self):
