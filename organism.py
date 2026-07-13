@@ -274,9 +274,32 @@ class Organism:
                                            at=r.get("step")),
                         r["action"]))]
 
+    def _copairs(self, a, b, W):
+        """E6: пары со-наблюдений (a,b) — одна на объект. В статике (W=None)
+        — последние наблюдения, как всегда. В динамике — самая со-временная
+        пара объекта в окне W: время-слепые пары у пассивного наблюдателя
+        некогерентны, и корреляция настоящей одной оси не проходит порог
+        (уловы embers и seeds: раскол жар/жизнь на две переменные)."""
+        if W is None:
+            return [(s[a][0], s[b][0])
+                    for s in self.sig.values() if a in s and b in s]
+        out = []
+        for hist in self.sig_hist.values():
+            if a in hist and b in hist:
+                ra, rb, dt = min(((ra, rb, abs(tb - ta))
+                                  for ra, ta in hist[a]
+                                  for rb, tb in hist[b]),
+                                 key=lambda x: x[2])
+                if dt <= W:
+                    out.append((ra, rb))
+        return out
+
     def _factor_groups(self):
         """Факторизация: симптомы -> группы взаимной корреляции ->
         одна латентная переменная на группу."""
+        W = self.horizon if CONSOL_WINDOW == "auto" else CONSOL_WINDOW
+        if not self._dyn:
+            W = None   # в статике время-локальность обязана быть невидимой
         acts = sorted(self.problem_actions)
         parent = {a: a for a in acts}
 
@@ -287,12 +310,20 @@ class Organism:
 
         for i, a in enumerate(acts):
             for b in acts[i + 1:]:
-                pairs = [(ra, rb)
-                         for s in self.sig.values()
-                         if a in s and b in s
-                         for (ra, _ta), (rb, _tb) in [(s[a], s[b])]]
-                if (len(pairs) >= MIN_CO and _functional_prob(pairs)
-                        and _functional_prob([(y, x) for x, y in pairs])):
+                pairs = self._copairs(a, b, W)
+                one_sided = W is not None
+                if one_sided and len(pairs) < MIN_CO:
+                    # со-временных пар мало (юный/пассивный агент) —
+                    # консервативный слепой режим со строгим критерием
+                    pairs = self._copairs(a, b, None)
+                    one_sided = False
+                fwd = _functional_prob(pairs)
+                rev = _functional_prob([(y, x) for x, y in pairs])
+                # E6: в динамике смерть между наблюдениями — воронка
+                # many-to-one, обратное отображение размывается законно;
+                # хватает одной стороны, неверные склейки отсеет MDL-гейт
+                ok = (fwd or rev) if one_sided else (fwd and rev)
+                if len(pairs) >= MIN_CO and ok:
                     parent[find(b)] = find(a)
 
         by_root = defaultdict(set)
@@ -301,14 +332,38 @@ class Organism:
         groups = []
         for root in sorted(by_root):
             gacts = by_root[root]
-            sigs = {o: {a: r for a, (r, _t) in s.items() if a in gacts}
-                    for o, s in self.sig.items()}
-            clusters = cluster_signatures(
-                {o: s for o, s in sigs.items() if s})
+            clusters = cluster_signatures(self._cosigs(gacts, W))
             if len(clusters) >= 2:   # переменная с одним значением — не знание
                 groups.append({"attr": f"class{len(groups)}",
                                "actions": gacts, "clusters": clusters})
         return groups
+
+    def _cosigs(self, gacts, W):
+        """E6: сигнатуры объектов для кластеризации. В статике (W=None) —
+        последние наблюдения. В динамике — со-временной снимок: якорь =
+        последнее наблюдение объекта по группе, значения из окна вокруг
+        якоря. Иначе кластеры-химеры из разных эпох (улов embers/seed5:
+        химера «только_пепел -> костёр_занялся» n=48 переголосовала
+        правду n=4, и все ответы экзамена инвертировались)."""
+        if W is None:
+            return {o: s for o, s in
+                    ((o, {a: r for a, (r, _t) in s.items() if a in gacts})
+                     for o, s in self.sig.items()) if s}
+        sigs = {}
+        for o, hist in self.sig_hist.items():
+            obs_g = {a: obs for a, obs in hist.items() if a in gacts}
+            if not obs_g:
+                continue
+            anchor = max(t for obs in obs_g.values() for _r, t in obs)
+            s = {}
+            for a, obs in obs_g.items():
+                r, dt = min(((r, abs(t - anchor)) for r, t in obs),
+                            key=lambda x: x[1])
+                if dt <= W:
+                    s[a] = r
+            if s:
+                sigs[o] = s
+        return sigs
 
     def _learn_rates(self):
         """E4: скорость изменения мира из sig_hist (анализ выживаемости).
