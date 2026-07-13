@@ -136,30 +136,27 @@ class Organism:
         return out
 
     def infer(self, action, result):
-        """(атрибут, значение) скрытой переменной по исходу зонда:
-        сначала чтение правил в обратную сторону, потом сигнатуры."""
-        cands = {(att, v) for r in self.mem.rules
-                 if r["action"] == action and r["outcome"][0] == result
-                 for att, v in r["conds"] if att.startswith("class")}
-        if len(cands) == 1:
-            return cands.pop()
-        # метод исключения: значения переменной, чьи правила противоречат
-        # наблюдению, отбрасываются; осталось одно — оно и есть ответ
+        """E5: (атрибут, значение) скрытой переменной по исходу зонда —
+        через симуляцию правил, а не чтение их задом наперёд.
+
+        Урок сидов 0/2/3 батареек: MDL даёт большинству правило-дефолт,
+        а именные правила — исключениям; чтение явных правил в обратную
+        сторону видит только исключения (хамелеона деградации) и слепо
+        к большинству. Лечение: перебрать значения переменной, для
+        каждого ПРЕДСКАЗАТЬ исход зонда полным движком (специфичные +
+        дефолт) и оставить совместимые с наблюдением; из совместимых —
+        носителя большинства (размер кластера)."""
         for g in self.groups:
-            rel = [r for r in self.mem.rules if r["action"] == action
-                   and any(att == g["attr"] for att, _ in r["conds"])]
-            if not rel:
+            if action not in g["actions"]:
                 continue
-            compat = [v for v in (f"c{k}" for k in range(len(g["clusters"])))
-                      if not any(r["outcome"][0] != result for r in rel
-                                 if (g["attr"], v) in r["conds"])]
-            if len(compat) == 1:
-                return (g["attr"], compat[0])
-        for g in self.groups:
-            if action in g["actions"]:
-                for k, (ms, _) in enumerate(g["clusters"]):
-                    if ms.get(action) == result:
-                        return (g["attr"], f"c{k}")
+            compat = []
+            for k, (_ms, objs) in enumerate(g["clusters"]):
+                v = f"c{k}"
+                p = self.mem.predict(frozenset({(g["attr"], v)}), action)
+                if p is not None and p["outcome"][0] == result:
+                    compat.append((len(objs), v))
+            if compat:
+                return (g["attr"], max(compat)[1])
         return None
 
     def contextualize(self, ctx0, obj, ents, at=None):
