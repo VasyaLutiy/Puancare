@@ -24,6 +24,7 @@ MIN_CO = 3           # минимум со-наблюдений для выво�
 FUNC_THRESHOLD = 0.65  # A6: 65% доминирование достаточно — мир динамичен
 FRESHNESS = 5        # A6: устаревшее наблюдение в динамическом мире = снова граница
 CLASS_PENALTY = 10.0 # A6: штраф за каждую лишнюю скрытую переменную — экономия онтологии
+CONSOL_WINDOW = FRESHNESS  # E1: окно когерентности при консолидации; None = без окна (E2)
 
 
 def cluster_signatures(sigs):
@@ -73,6 +74,7 @@ class Organism:
         self.mem = Memory()
         self.records = []
         self.sig = defaultdict(dict)
+        self.sig_hist = defaultdict(lambda: defaultdict(list))  # E1: вся линия (результат, шаг)
         self.groups = []          # [{"attr","actions","clusters"}] — теории
         self.problem_actions = set()
         self.class_relevant = {}  # action -> какие class-атрибуты в правилах
@@ -89,6 +91,36 @@ class Organism:
         for g in self.groups:
             s = {a: r for a, (r, _t) in self.sig.get(obj, {}).items()
                  if a in g["actions"]}
+            for k, (msig, _) in enumerate(g["clusters"]):
+                shared = set(s) & set(msig)
+                if shared and all(s[a] == msig[a] for a in shared):
+                    out[g["attr"]] = f"c{k}"
+                    break
+        return out
+
+    def obj_classes_at(self, obj, t):
+        """E1: классы объекта по наблюдениям, синхронным моменту t.
+
+        Эпизод — свидетельство о паре (объект, t): метку класса ему дают
+        только наблюдения из окна |шаг - t| <= CONSOL_WINDOW, ближайшие к t.
+        В статическом мире (и при CONSOL_WINDOW=None) тождественно
+        obj_classes — время-локальность обязана быть там невидимой."""
+        if not self._dyn or CONSOL_WINDOW is None or t is None:
+            return self.obj_classes(obj)
+        out = {}
+        hist = self.sig_hist.get(obj)
+        if not hist:
+            return out
+        for g in self.groups:
+            s = {}
+            for a in g["actions"]:
+                obs = hist.get(a)
+                if not obs:
+                    continue
+                r, dt = min(((r, abs(st - t)) for r, st in obs),
+                            key=lambda x: x[1])
+                if dt <= CONSOL_WINDOW:
+                    s[a] = r
             for k, (msig, _) in enumerate(g["clusters"]):
                 shared = set(s) & set(msig)
                 if shared and all(s[a] == msig[a] for a in shared):
@@ -123,10 +155,12 @@ class Organism:
                         return (g["attr"], f"c{k}")
         return None
 
-    def contextualize(self, ctx0, obj, ents):
+    def contextualize(self, ctx0, obj, ents, at=None):
         ctx = ctx0
         if obj:
-            oc = self.obj_classes(obj)
+            # E1: для исторических эпизодов (at задан) — время-локальные классы
+            oc = (self.obj_classes_at(obj, at) if at is not None
+                  else self.obj_classes(obj))
             if oc:
                 ctx = ctx | set(oc.items())
         if self.R and obj is not None:
@@ -189,13 +223,15 @@ class Organism:
         outcome = (tr["result"], tuple(sorted({e[0] for e in tr["effects"]})))
         self.records.append({"obj": obj, "ctx": ctx0, "action": a,
                              "outcome": outcome, "truth": truth,
-                             "ents": ents, "effects": tr["effects"]})
+                             "ents": ents, "effects": tr["effects"],
+                             "step": self.steps})  # E1: эпизод знает своё время
         self.tried.add((ctx_now, a))
         if obj:
             prev = self.sig[obj].get(a)
             if prev is not None and prev[0] != outcome[0]:
                 self._dyn = True   # A6: то же действие — другой результат → мир меняется
             self.sig[obj][a] = (outcome[0], self.steps)  # A6: (результат, шаг)
+            self.sig_hist[obj][a].append((outcome[0], self.steps))
         self.steps += 1
         if self.steps % SLEEP_EVERY == 0:
             self.sleep()
@@ -206,7 +242,8 @@ class Organism:
     def _relabel(self):
         mem = Memory()
         for r in self.records:
-            mem.episodes[(self.contextualize(r["ctx"], r["obj"], r["ents"]),
+            mem.episodes[(self.contextualize(r["ctx"], r["obj"], r["ents"],
+                                             at=r.get("step")),
                           r["action"], r["outcome"])] += 1
         mem.consolidate()
         return mem
@@ -227,7 +264,8 @@ class Organism:
         return [r for r in self.records
                 if (lambda p: p is None or p["outcome"] != r["outcome"])(
                     self.mem.predict(
-                        self.contextualize(r["ctx"], r["obj"], r["ents"]),
+                        self.contextualize(r["ctx"], r["obj"], r["ents"],
+                                           at=r.get("step")),
                         r["action"]))]
 
     def _factor_groups(self):
