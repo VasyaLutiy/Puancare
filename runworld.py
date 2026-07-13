@@ -108,6 +108,13 @@ def full_run(spec, glue):
                   f" необъясн. {residue(org):2d}, экз: {exams}")
             last = org
 
+    if last.rates:
+        rs = "  ".join(f"{a}:{r}->{p:.0%}"
+                       for (a, r), p in sorted(last.rates.items())
+                       if p >= 0.03)  # прижатые к нулю — шум сжатия, не знание
+        h = "бесконечен" if last.horizon is None else f"{last.horizon} шагов"
+        print(f"\nДинамика (выучено, любопытный 2000): {rs}; горизонт {h}")
+
     print("\nПеременные (любопытный, 2000):")
     for g in last.groups:
         print(f"  {g['attr']} <- симптомы {sorted(g['actions'])}")

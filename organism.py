@@ -13,6 +13,7 @@
 Ядро памяти (memory.Memory) импортируется без изменений.
 """
 
+import math
 import random
 from collections import defaultdict
 
@@ -24,7 +25,10 @@ MIN_CO = 3           # минимум со-наблюдений для выво�
 FUNC_THRESHOLD = 0.65  # A6: 65% доминирование достаточно — мир динамичен
 FRESHNESS = 5        # A6: устаревшее наблюдение в динамическом мире = снова граница
 CLASS_PENALTY = 10.0 # A6: штраф за каждую лишнюю скрытую переменную — экономия онтологии
-CONSOL_WINDOW = FRESHNESS  # E1: окно когерентности при консолидации; None = без окна (E2)
+CONSOL_WINDOW = "auto"  # E4: "auto" = горизонт, выведенный из выученной скорости
+                        # мира; число = фиксированное окно (E1); None = без окна (E2)
+PRIOR_PAIRS = 25     # E4b: инерция рефлекса — вес врождённого горизонта в псевдопарах
+P0 = 1 - FUNC_THRESHOLD ** (1.0 / FRESHNESS)  # газард, неявно зашитый во FRESHNESS
 
 
 def cluster_signatures(sigs):
@@ -82,6 +86,8 @@ class Organism:
         self.R = set()            # связи: (obj, сущность, её живое состояние)
         self.steps = 0
         self._dyn = False         # A6: обнаружили что мир меняется под ногами
+        self.rates = {}           # E4: (действие, результат) -> p смены за шаг
+        self.horizon = None       # E4: выведенное окно когерентности; None = бесконечно
 
     # ---- понятия ----
 
@@ -105,7 +111,8 @@ class Organism:
         только наблюдения из окна |шаг - t| <= CONSOL_WINDOW, ближайшие к t.
         В статическом мире (и при CONSOL_WINDOW=None) тождественно
         obj_classes — время-локальность обязана быть там невидимой."""
-        if not self._dyn or CONSOL_WINDOW is None or t is None:
+        W = self.horizon if CONSOL_WINDOW == "auto" else CONSOL_WINDOW
+        if not self._dyn or W is None or t is None:
             return self.obj_classes(obj)
         out = {}
         hist = self.sig_hist.get(obj)
@@ -119,7 +126,7 @@ class Organism:
                     continue
                 r, dt = min(((r, abs(st - t)) for r, st in obs),
                             key=lambda x: x[1])
-                if dt <= CONSOL_WINDOW:
+                if dt <= W:
                     s[a] = r
             for k, (msig, _) in enumerate(g["clusters"]):
                 shared = set(s) & set(msig)
@@ -192,9 +199,11 @@ class Organism:
                                     for a in g["actions"])):
                         return True
         # A6: в динамическом мире устаревшее наблюдение нужно освежить
+        # E4: срок годности — выученный горизонт, а не врождённая константа
         if (self._dyn and obj is not None
                 and action in self.sig.get(obj, {})
-                and self.steps - self.sig[obj][action][1] > FRESHNESS):
+                and self.steps - self.sig[obj][action][1]
+                    > (self.horizon if self.horizon is not None else FRESHNESS)):
             return True
         if (ctx, action) in self.tried:
             return False
@@ -304,7 +313,53 @@ class Organism:
                                "actions": gacts, "clusters": clusters})
         return groups
 
+    def _learn_rates(self):
+        """E4: скорость изменения мира из sig_hist (анализ выживаемости).
+
+        Для каждой (действие, результат) — последовательные пары наблюдений
+        одного объекта (r1,t1)->(r2,t2); MLE вероятности p смены результата
+        за шаг: P(тот же через dt) = (1-p)^dt. Сетка по p — читаемо и
+        достаточно: нам нужен порядок величины, не третий знак."""
+        data = defaultdict(list)   # (действие, r1) -> [(dt, сменился)]
+        for hist in self.sig_hist.values():
+            for a, obs in hist.items():
+                for (r1, t1), (r2, t2) in zip(obs, obs[1:]):
+                    if t2 > t1:
+                        data[(a, r1)].append((t2 - t1, r1 != r2))
+        rates = {}
+        for key, pairs in data.items():
+            best_p, best_ll = 0.0, None
+            for i in range(101):
+                p = i / 200          # p in [0, 0.5]
+                ll = 0.0
+                for dt, changed in pairs:
+                    stay = (1 - p) ** dt
+                    pr = (1 - stay) if changed else stay
+                    if pr <= 0.0:
+                        ll = None
+                        break
+                    ll += math.log(pr)
+                if ll is not None and (best_ll is None or ll > best_ll):
+                    best_p, best_ll = p, ll
+            # E4b: сжатие к врождённому p0 — юность доверяет рефлексу,
+            # зрелость (пар >> PRIOR_PAIRS) — выученной скорости. Лечит
+            # юношеские качели: переоценку по горстке пар и «мир статичен,
+            # потому что я его ещё не мерил».
+            n = len(pairs)
+            rates[key] = (n * best_p + PRIOR_PAIRS * P0) / (n + PRIOR_PAIRS)
+        return rates
+
     def sleep(self):
+        # E4: сначала обновить модель времени — переразметка ниже уже
+        # пользуется выведенным горизонтом
+        self.rates = self._learn_rates()
+        # мир замечен в динамике, но скорость не датируется (распад быстрее
+        # перемера, ключи без пар) — рефлекс, а не вечность
+        p_max = max(self.rates.values(),
+                    default=(P0 if self._dyn else 0.0))
+        self.horizon = (None if p_max <= 0.0 else
+                        max(1, int(math.log(FUNC_THRESHOLD)
+                                   / math.log(1.0 - p_max))))
         # A6: сканируем записи — если один объект при одном действии дал два
         # разных результата, мир точно динамический
         if not self._dyn:
