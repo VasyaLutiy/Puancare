@@ -448,6 +448,52 @@ def _hazard_coordinate(ax, s, pairs_ev):
     return h_hat, regret
 
 
+def _hazard_mle(ax, s, pairs_ev):
+    """M-шаг кубика s: мода того же правдоподобия (_stay2), найденная
+    золотым сечением за ~18 вычислений вместо сетки в 101 точку. Нижняя
+    граница = разрешение грида HAZ_GRID[0], чтобы почти-нулевой кубик
+    садился туда же, куда садилось среднее апостериора грида (прайор-
+    эффект сохранён без сетки). Регрет-штраф здесь НЕ считается —
+    он берётся гридом один раз на сошедшихся параметрах."""
+    k = ax.k
+    by_dt = {}
+    for dt, xi in pairs_ev:
+        r = by_dt.get(dt)
+        if r is None:
+            r = by_dt[dt] = [0.0] * k
+        for j in range(k):
+            r[j] += xi[s][j]
+    if k == 2:
+        b_ret = ax.haz[1 - s]
+    else:
+        b_ret = min(max(sum(ax.haz[j] * ax.tgt[j][s]
+                            for j in range(k) if j != s) / (k - 1),
+                        1e-9), 0.5)
+    rows = list(by_dt.items())
+
+    def ll(h):
+        out = 0.0
+        for dt, row in rows:
+            stay = min(max(_stay2(h, b_ret, dt), 1e-12), 1.0 - 1e-12)
+            out += row[s] * math.log(stay) + (sum(row) - row[s]) * math.log(1 - stay)
+        return out
+
+    lo, hi = HAZ_GRID[0], 0.5
+    g = (math.sqrt(5.0) - 1) / 2
+    c, d = hi - g * (hi - lo), lo + g * (hi - lo)
+    fc, fd = ll(c), ll(d)
+    for _ in range(18):
+        if fc > fd:
+            hi, d, fd = d, c, fc
+            c = hi - g * (hi - lo)
+            fc = ll(c)
+        else:
+            lo, c, fc = c, d, fd
+            d = lo + g * (hi - lo)
+            fd = ll(d)
+    return (lo + hi) / 2
+
+
 def fit_axis(actions, timelines, k, restarts=2, iters=5):
     """EM: таблица ответов + кубики. timelines: {obj: [(t, a, r), ...]}."""
     res_a = defaultdict(set)
@@ -519,20 +565,21 @@ def fit_axis(actions, timelines, k, restarts=2, iters=5):
                                 tgt_w[s][j] += xi[s][j]
             for key, cnt in new_emis.items():
                 ax.emis[key] = dict(cnt)
-            haz_regret = [0.0] * k
             for s in range(k):
-                # одно состояние — уходить некуда, кубик не определён
-                if k > 1:
-                    ax.haz[s], haz_regret[s] = _hazard_coordinate(
-                        ax, s, pairs_ev)
-                else:
-                    ax.haz[s] = 0.0
+                # M-шаг кубика: мода правдоподобия золотым сечением.
+                # Грид-регрет (Штраф Оккама) считаем ОДИН раз в конце —
+                # на каждой итерации нужна только оценка h.
+                ax.haz[s] = _hazard_mle(ax, s, pairs_ev) if k > 1 else 0.0
                 tot = sum(tgt_w[s][j] for j in range(k) if j != s)
                 ax.tgt[s] = [0.0 if j == s else
                              (tgt_w[s][j] + 0.5) / (tot + 0.5 * (k - 1))
                              for j in range(k)] if k > 1 else [0.0]
             ax.pi = _norm([w + 0.5 for w in pi_w])
             ax._tpow.clear()   # параметры сменились — степени устарели
+        # Штраф Оккама кубика: грид-регрет ОДИН раз на сошедшихся
+        # параметрах (а не на каждой EM-итерации)
+        haz_regret = [(_hazard_coordinate(ax, s, pairs_ev)[1] if k > 1 else 0.0)
+                      for s in range(k)]
         # Штраф Оккама оси: точный код смеси Джеффриса на клетку —
         # линейка различимости каждого параметра по ЕГО порции данных.
         emis_bits = sum(
