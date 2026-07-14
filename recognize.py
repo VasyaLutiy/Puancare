@@ -36,50 +36,81 @@ def recognize(query, library):
     return ranked, radius
 
 
-def report(name, query, library, expect):
+def report(name, query, library, expect, tag="спрятан"):
+    """expect: множество приемлемых ближайших имён, или None если ждём
+    «новую форму»."""
     ranked, radius = recognize(query, library)
     d1, near = ranked[0]
     d2 = ranked[1][0] if len(ranked) > 1 else d1 + 1.0
     conf = (d2 - d1) / d2 if d2 > 0 else 1.0
     novel = d1 > radius
     verdict = "НОВАЯ ФОРМА" if novel else f"узнан как «{near}»"
-    # falsifiable: прогноз шаблона о k против факта спрятанного мира
-    pred_k = library[near]["k"]
-    true_k = query["k"]
-    k_ok = "" if novel else ("k совпал" if pred_k == true_k
-                             else f"k ПРОМАХ ({pred_k}≠{true_k})")
-    family_ok = ("НОВАЯ" if expect is None else
-                 ("верно" if (not novel and near == expect) else "мимо"))
-    print(f"  спрятан {name:10s}: {verdict:20s} "
+    pred_k = library[near]["k"]      # falsifiable: k шаблона vs факт запроса
+    k_ok = "" if novel else ("k совпал" if pred_k == query["k"]
+                             else f"k ПРОМАХ ({pred_k}≠{query['k']})")
+    if expect is None:
+        family_ok = "верно(новая)" if novel else "мимо(ждали новую)"
+        ok = novel
+    else:
+        family_ok = "верно" if (not novel and near in expect) else "мимо"
+        ok = not novel and near in expect
+    print(f"  {tag} {name:10s}: {verdict:22s} "
           f"(ближ={d1:.2f}, увер={conf:.0%}, радиус={radius:.2f})  "
           f"семья:{family_ok}  {k_ok}")
-    ok = (novel and expect is None) or (not novel and near == expect)
     return ok
 
 
-if __name__ == "__main__":
-    worlds = sys.argv[1:] or ["batteries", "car", "bike", "bird"]
-    # ожидаемая семья каждого (мой зарегистрированный прогноз до прогона):
-    # batteries<->car; bike -> к семье-баку (batteries); bird -> новая форма
-    expect = {"batteries": "car", "car": "batteries",
-              "bike": "batteries", "bird": None}
-
-    print("=== жизни -> подписи ===")
-    sigs = {}
+def build_sigs(worlds):
+    out = {}
     for w in worlds:
         ax = sig.best_axis(w)
         if ax is None:
-            print(f"{w}: ось не выучена"); continue
-        sigs[w] = sig.signature(ax)
-        s = sigs[w]
+            print(f"  {w}: ось не выучена"); continue
+        out[w] = sig.signature(ax)
+        s = out[w]
         print(f"  {w:10s}: k={s['k']} устойч={s['persist']:.3f} "
               f"направл={s['directed']:.3f} резк={s['sharp']} исх={s['ncards']}")
+    return out
 
+
+TANK = {"batteries", "car"}   # семья-бак 2 состояния
+
+
+def main_loo(worlds):
+    expect = {"batteries": TANK, "car": TANK, "bike": TANK, "bird": None}
+    print("=== жизни -> подписи ===")
+    sigs = build_sigs(worlds)
     print("\n=== leave-one-out узнавание ===")
     ok = 0
     for w in worlds:
         if w not in sigs:
             continue
         lib = {n: s for n, s in sigs.items() if n != w}
-        ok += report(w, sigs[w], lib, expect.get(w))
+        ok += report(w, sigs[w], lib, expect.get(w, TANK))
     print(f"\nсовпало с прогнозом: {ok}/{len(sigs)}")
+
+
+def main_novel(lib_worlds, q_worlds, expect):
+    print("=== библиотека -> подписи ===")
+    lib = build_sigs(lib_worlds)
+    print("=== запросы (held-out) -> подписи ===")
+    qs = build_sigs(q_worlds)
+    print("\n=== узнавание пришельцев по фиксированной библиотеке ===")
+    ok = 0
+    for w in q_worlds:
+        if w in qs:
+            ok += report(w, qs[w], lib, expect.get(w, TANK), tag="запрос")
+    print(f"\nсовпало с прогнозом: {ok}/{len(qs)}")
+
+
+if __name__ == "__main__":
+    a = sys.argv[1:]
+    if "--lib" in a:
+        lib_worlds = a[a.index("--lib") + 1].split(",")
+        q_worlds = a[a.index("--query") + 1].split(",")
+        # зарегистрированный прогноз: batt1/batt2 -> семья-бак; batt3 (3
+        # ступени) -> лестница = bird (форма бьёт имя)
+        expect = {"batt1": TANK, "batt2": TANK, "batt3": {"bird"}}
+        main_novel(lib_worlds, q_worlds, expect)
+    else:
+        main_loo(a or ["batteries", "car", "bike", "bird"])
