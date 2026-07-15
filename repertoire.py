@@ -158,28 +158,28 @@ def discover_lib(budget=1000):
     return lib
 
 
-def radius(lib):
+def radius(lib, w=None):
     names = list(lib)
     r = 0.0
     for a in names:
-        others = [koopman.dist(lib[a], lib[b]) for b in names if b != a]
+        others = [koopman.dist(lib[a], lib[b], w) for b in names if b != a]
         if others:
             r = max(r, min(others))
     return r
 
 
-if __name__ == "__main__":
-    lib = discover_lib()
-    rad = radius(lib)
-    print(f"\nрадиус знакомого (из библиотеки) = {rad:.2f}")
-
-    print("\n=== УЗНАВАНИЕ запросов с порогом новизны (быстрая дорога) ===")
-    ok = 0
-    for (qname, expect_family), text in QUERIES.items():
-        qs, _ = quick_signature(glue_of(text), 1000)
-        ranked = sorted((koopman.dist(qs, lib[n]), n) for n in lib)
+def judge(lib, qsigs, w, label):
+    """Один прогон узнавания при данных весах метрики. Возвращает ok/total
+    и печатает разрыв знакомое/новое — главный индикатор, что порог не
+    держится на подобранных константах."""
+    rad = radius(lib, w)
+    ok, fam_d, nov_d = 0, [], []
+    print(f"\n--- веса: {label} | радиус знакомого = {rad:.2f} ---")
+    for (qname, expect_family), qs in qsigs.items():
+        ranked = sorted((koopman.dist(qs, lib[n], w), n) for n in lib)
         d, near = ranked[0]
         novel = d > rad
+        (nov_d if novel else fam_d).append(d)
         if novel:
             verdict = "НОВАЯ ФОРМА"
             hit = expect_family is None
@@ -188,6 +188,34 @@ if __name__ == "__main__":
             hit = expect_family is not None and expect_family in near
         ok += hit
         mark = "✓" if hit else "✗"
-        print(f"  {mark} {qname:18s}: {verdict:20s} "
+        print(f"  {mark} {qname:18s}: {verdict:22s} "
               f"(ближ={d:.2f} @ {near}, k={qs['k']}, spec={qs['spec']})")
-    print(f"\nсовпало с прогнозом: {ok}/{len(QUERIES)}")
+    gap = (min(nov_d) / max(fam_d)) if fam_d and nov_d and max(fam_d) > 0 \
+        else float("inf")
+    print(f"  итог: {ok}/{len(qsigs)}, разрыв знакомое/новое = {gap:.1f}×")
+    return ok
+
+
+if __name__ == "__main__":
+    import sys
+    lib = discover_lib()
+    qsigs = {key: quick_signature(glue_of(text), 1000)[0]
+             for key, text in QUERIES.items()}
+    cal = koopman.calibrate(lib.values())
+
+    if "--compare" in sys.argv:
+        # эксперимент R2 (одноразовый вердикт): держалось ли узнавание на
+        # рукодельных весах? Три судьи над одними подписями. Итог 15.07:
+        # калиброванные 4/4 разрыв 38x, хардкод 4/4 разрыв 14x, равные 3/4
+        # — константы не были несущими, калибровка их превосходит.
+        for label, w in [("КАЛИБРОВАННЫЕ (из данных)", cal),
+                         ("РАВНЫЕ (без настройки)", None),
+                         ("старый хардкод 3/2/1/0.5",
+                          {"spec": 3.0, "osc": 2.0, "sharp": 1.0,
+                           "ncards": 0.5})]:
+            judge(lib, qsigs, w, label)
+    else:
+        # рабочий вид: один судья, веса из библиотеки, никаких констант
+        print(f"\nвеса метрики (калиброваны из библиотеки, не руками): "
+              f"{ {c: round(v, 2) for c, v in cal.items()} }")
+        judge(lib, qsigs, cal, "калиброванные")

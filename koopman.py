@@ -65,19 +65,43 @@ def signature(ax):
             "sharp": sorted(sharp), "ncards": sorted(ncards)}
 
 
-def dist(A, B):
-    """Расстояние форм. Заметь: НЕТ отдельного слагаемого по k — оно входит
-    через длину спектра (padL1 добивает нулём недостающие быстрые моды)."""
-    def padL1(x, y):
-        n = max(len(x), len(y))
-        x = x + [0.0] * (n - len(x))
-        y = y + [0.0] * (n - len(y))
-        return sum(abs(a - b) for a, b in zip(sorted(x), sorted(y)))
-    return (3.0 * padL1(A["spec"], B["spec"])        # спектр динамики
-            + 2.0 * padL1(A["osc"], B["osc"])        # осцилляции
-            + padL1(A["sharp"], B["sharp"])          # резкость зондов
-            + 0.5 * padL1([float(c) for c in A["ncards"]],
-                          [float(c) for c in B["ncards"]]))
+COMPS = ("spec", "osc", "sharp", "ncards")     # компоненты подписи
+
+
+def _vals(S, c):
+    return [float(v) for v in S[c]]
+
+
+def _padL1(x, y):
+    n = max(len(x), len(y))
+    x = x + [0.0] * (n - len(x))
+    y = y + [0.0] * (n - len(y))
+    return sum(abs(a - b) for a, b in zip(sorted(x), sorted(y)))
+
+
+def calibrate(sigs):
+    """Веса компонент ИЗ БИБЛИОТЕКИ, а не из констант: 1/средний попарный
+    зазор компоненты по членам (выравнивание масштабов — у каждой компоненты
+    средний вклад 1). Компонента, не различающая членов библиотеки (нулевой
+    разброс), веса не получает. Никаких ручных 3.0/2.0/0.5."""
+    sigs = list(sigs)
+    pairs = [(a, b) for i, a in enumerate(sigs) for b in sigs[i + 1:]]
+    w = {}
+    for c in COMPS:
+        m = (sum(_padL1(_vals(a, c), _vals(b, c)) for a, b in pairs)
+             / len(pairs)) if pairs else 0.0
+        w[c] = 1.0 / m if m > 1e-9 else 0.0
+    return w
+
+
+def dist(A, B, w=None):
+    """Расстояние форм. w=None → равные веса (без ручной настройки);
+    calibrate(библиотека) даёт веса из данных. Заметь: НЕТ отдельного
+    слагаемого по k — оно входит через длину спектра (padL1 добивает нулём
+    недостающие быстрые моды)."""
+    if w is None:
+        w = {c: 1.0 for c in COMPS}
+    return sum(w[c] * _padL1(_vals(A, c), _vals(B, c)) for c in COMPS)
 
 
 def _matrix(sigs, ws, metric):
@@ -112,9 +136,13 @@ if __name__ == "__main__":
 
     ws = [w for w in worlds if w in ksigs]
     if len(ws) >= 2:
-        print("\n=== KOOPMAN: попарные расстояния (форма) ===")
-        _matrix(ksigs, ws, dist)
+        cw = calibrate(ksigs[w] for w in ws)
+        kd = lambda a, b: dist(a, b, cw)
+        print(f"\n(веса калиброваны по библиотеке: "
+              f"{ {c: round(v, 2) for c, v in cw.items()} })")
+        print("=== KOOPMAN: попарные расстояния (форма) ===")
+        _matrix(ksigs, ws, kd)
         print("\n=== KOOPMAN: ближайший сосед ===")
-        _neighbors(ksigs, ws, dist)
+        _neighbors(ksigs, ws, kd)
         print("\n=== SIG (рукодельный, для сравнения): ближайший сосед ===")
         _neighbors(ssigs, ws, sig.dist)

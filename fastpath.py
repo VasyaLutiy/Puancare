@@ -88,7 +88,8 @@ def recognize_and_fit(glue, budget, repertoire, ks=(2, 3, 4)):
     acts = tuple(sorted(org.object_actions))
     tls = org._axis_timelines(acts)
     fits = {k: fit_axis(acts, tls, k) for k in ks}
-    prov = max(fits.values(), key=lambda a: a.score)   # для подписи
+    prov = fits[select_k(fits)]     # для подписи — тот же margin-отбор,
+    # что в quick_signature (argmax по score плавает, см. probe_k)
     q = koopman.signature(prov)
     scored = sorted((koopman.dist(q, f["sig"]), i, f)
                     for i, f in enumerate(repertoire) if f["sig"])
