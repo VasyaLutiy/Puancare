@@ -70,11 +70,16 @@ def select_k(fits, margin=100.0):
     return k
 
 
-def quick_signature(glue, budget, ks=(2, 3, 4), margin=100.0):
+def quick_signature(glue, budget, ks=(2, 3, 4), margin=100.0, acts=None):
     """Только подпись нового мира (быстро): собрать → подогнать k∈ks →
-    отобрать k с запасом → подпись. Для узнавания/новизны, без навязывания."""
+    отобрать k с запасом → подпись. Для узнавания/новизны, без навязывания.
+
+    acts — ЛИНЗА: ограничить подпись поднабором действий. Нужна, когда
+    запрос видел мир у́же библиотеки (цель жила только зондом): подписи
+    сравнимы лишь через ОДНУ линзу, иначе d — артефакт ширины обзора,
+    а не формы (улов held-out v2)."""
     org = _collect(glue, budget)
-    acts = tuple(sorted(org.object_actions))
+    acts = tuple(sorted(acts if acts is not None else org.object_actions))
     tls = org._axis_timelines(acts)
     fits = {k: fit_axis(acts, tls, k) for k in ks}
     k = select_k(fits, margin)
