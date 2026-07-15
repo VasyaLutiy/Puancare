@@ -89,6 +89,15 @@ def build(donor_text, target_text):
             raise ValueError(f"[тройка] действие экзамена {a!r} есть в цели, "
                              f"но не в доноре — донор не умеет того, что "
                              f"проверяем (нечего ввозить)")
+    # КОНТРАКТ КОМПОЗИЦИИ: исходы действия-ВОПРОСА общие у донора и цели —
+    # иначе ввезённая карта донора предсказывает исходы, которых у цели нет
+    # (карта немая, экзамен пуст). Исходы зонда и прочие слова — свои.
+    d_outs = {r["result"] for r in d_spec.obj_actions[ask]}
+    t_outs = {r["result"] for r in t_spec.obj_actions[ask]}
+    if d_outs != t_outs:
+        raise ValueError(f"[контракт] исходы вопроса {ask!r} расходятся: "
+                         f"донор {sorted(d_outs)} != цель {sorted(t_outs)} — "
+                         f"карта не встанет, тройка недействительна")
     probe_text = make_probe_text(target_text)
     p_spec = validate(probe_text, "цель-зонд")
     return {"donor": (donor_text, d_spec),
