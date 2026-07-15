@@ -147,13 +147,28 @@ class Ruleset:
         return conds, outcome, correct, exceptions, best_gain
 
     def total_bits(self):
-        """Полная длина описания пережитой истории этим набором правил."""
+        """Полная длина описания пережитой истории этим набором правил.
+
+        Остаток считается ГРУППОЙ по (ctx, действие): кап «запомнить как
+        специфичное правило» валиден лишь для ОДНОЙ строки группы —
+        правила о прочих исходах того же ctx взаимоисключающи, их повторы
+        платят полный сюрприз m·out_bits. Прежний по-строчный min-кап
+        продавал незнание по цене знания (смесь исходов под одним ctx —
+        а это и есть скрытое состояние — почти бесплатна), из-за чего ось
+        не окупалась никогда: отказ hard1 при +270 битах у форс-фита и
+        немонотонность приёмки по бюджету (тумблер 1500+/2000−, насыщение
+        капа). Арка судьи, 15.07.2026; диагностика — judge_probe.py."""
         bits = sum(self._rule_cost(r["action"], r["conds"])
                    for r in self.rules)
+        groups = defaultdict(list)
         for (ctx, a, o), m in self.episodes.items():
             p = self.predict(ctx, a)
             if p is None or p["outcome"] != o:
-                bits += self._resid_cost(ctx, a, m)
+                groups[(ctx, a)].append(m * self.out_bits(a))
+        for (ctx, a), full in groups.items():
+            raw = self._raw_cost(ctx, a)
+            save = max((f - min(raw, f)) for f in full)   # кап — одной строке
+            bits += sum(full) - save
         return bits
 
     # ---------- извлечение (семантика memory.py, без изменений) ----------
