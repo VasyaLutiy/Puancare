@@ -638,12 +638,6 @@ class Organism:
         self.R = set()
         self.steps = 0
         self._bel = {}            # (i_оси, obj) -> (belief, t) — кэш фильтра
-        # перенос (по умолчанию выкл → голый неотличим от нынешнего):
-        # затравка от узнанной формы прошлой жизни даёт структуре с k=_seed_k
-        # приорную скидку в битах — судья покупает ту онтологию на меньших
-        # данных. Эмиссии НЕ пересаживаются (флип-риск), EM находит их сам.
-        self._seed_k = None
-        self._seed_bonus = 0.0
 
     # ---------- belief ----------
 
@@ -940,21 +934,9 @@ class Organism:
         # приговор — глобальные биты
         if self.problem_actions:
             cands = self._structure(self.problem_actions)
-            # затравка переноса: ПРИНУДИТЕЛЬНО попробовать ось на узнанном k
-            # (иначе на малых данных _structure k=seed_k даже не предлагает)
-            if self._seed_k:
-                acts = sorted(self.problem_actions)
-                sax = fit_axis(tuple(acts), self._axis_timelines(acts),
-                               self._seed_k)
-                if sax is not None:
-                    cands = [[sax]] + cands
             for cand_axes in cands:
                 cand_mem = self._relabel(cand_axes)
                 cand_bits = self._total_bits(cand_axes, cand_mem)
-                # ... и субсидировать её в битах (сила = близость узнавания)
-                if self._seed_k and any(ax.k == self._seed_k
-                                        for ax in cand_axes):
-                    cand_bits -= self._seed_bonus
                 if cand_bits < cur_bits:
                     self.axes, self.mem = cand_axes, cand_mem
                     cur_bits = cand_bits
