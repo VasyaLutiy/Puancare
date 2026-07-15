@@ -71,13 +71,18 @@ def best_axis(world, budget=2000, curious=False):
     return max(org.axes, key=lambda a: a.n_obs) if org.axes else None
 
 
-def dist(A, B):
+def dist(A, B, blind_k=False):
+    """blind_k=True — слепая к k метрика для ЗАСЕВА переноса: k это то, что
+    мы бутстрапим, матчить по нему циклично (k=2-мир узнается как k=2-форма
+    и засеет k=2 = ноль пользы). Матчим по инвариантным к разрешению
+    признакам: кардинальность зонда, направленность, резкость."""
     def padL1(x, y):
         n = max(len(x), len(y))
         x = x + [0.0] * (n - len(x))
         y = y + [0.0] * (n - len(y))
         return sum(abs(a - b) for a, b in zip(sorted(x), sorted(y)))
-    return (2.0 * abs(A["k"] - B["k"])
+    k_term = 0.0 if blind_k else 2.0 * abs(A["k"] - B["k"])
+    return (k_term
             + 3.0 * abs(A["persist"] - B["persist"])
             + 3.0 * abs(A["directed"] - B["directed"])
             + padL1(A["sharp"], B["sharp"])

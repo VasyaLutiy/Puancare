@@ -12,10 +12,50 @@
 import sys
 
 import runworld
+import sig
+import recognize
 from organism2 import Organism
 from worldkit import load_spec, make_glue
 
 runworld.Organism = Organism
+
+
+def live_autonomous(glue, lib, budget=2000, orient_frac=0.3, worlds=10):
+    """Автономная петля: ориентация вслепую → узнать себя по библиотеке
+    lib={имя: подпись} → seed_k и сила приора ИЗ узнавания (не руками) →
+    дожить с засевом. Возвращает (организм, инфо-о-засеве)."""
+    org = Organism(False, glue["object_actions"], glue["ctx_fn"],
+                   glue["truth_fn"], glue.get("entities_fn"))
+    per = budget // worlds
+    n_orient = max(1, int(worlds * orient_frac))
+    for ep in range(n_orient):                       # фаза 1: вслепую
+        w = glue["factory"](ep)
+        for _ in range(per):
+            org.act(w, ep)
+    info = "оси нет — засев не задан"
+    if org.axes:
+        q = sig.signature(max(org.axes, key=lambda a: a.n_obs))
+        # узнавание ДЛЯ ЗАСЕВА — слепое к k (k бутстрапим, матчить по нему
+        # циклично); по нему же и радиус новизны
+        names = list(lib)
+        ranked = sorted((sig.dist(q, lib[n], blind_k=True), n) for n in names)
+        radius = max(min(sig.dist(lib[a], lib[b], blind_k=True)
+                         for b in names if b != a) for a in names)
+        d1, near = ranked[0]
+        if d1 <= radius and near in lib:
+            close = max(0.0, 1.0 - d1 / radius)
+            org._seed_k = lib[near]["k"]
+            org._seed_bonus = 6.0 * close
+            info = (f"узнан как {near} (d={d1:.2f}, радиус={radius:.2f}) → "
+                    f"засев k={org._seed_k}, сила={org._seed_bonus:.1f}")
+        else:
+            info = f"новая форма (d={d1:.2f}>{radius:.2f}) → без засева"
+    for ep in range(n_orient, worlds):               # фаза 2: с засевом
+        w = glue["factory"](ep)
+        for _ in range(per):
+            org.act(w, ep)
+    org.sleep()
+    return org, info
 
 
 def live_seeded(glue, curious, budget, seed_k=None, bonus=0.0, worlds=10):
@@ -41,7 +81,21 @@ def exam_score(org, glue):
     return f"{s[0]}/{s[1]}"
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--auto" in sys.argv:
+    # автономная петля: библиотека + новый мир, k и сила приора сами
+    worlds_q = [a for a in sys.argv[1:] if not a.startswith("--")]
+    world = worlds_q[0] if worlds_q else "last/baloon2"
+    print("=== библиотека ===")
+    lib = recognize.build_sigs(["batteries", "car", "bird"])
+    glue = make_glue(load_spec(f"worlds/{world}.yaml"))
+    print(f"\n=== автономно на {world} ===")
+    for b in [600, 1000, 2000]:
+        naked = live_seeded(glue, False, b, seed_k=None)
+        auto, info = live_autonomous(glue, lib, budget=b)
+        print(f"бюджет {b:>4}: ГОЛЫЙ k={learned_k(naked)} {exam_score(naked,glue)}"
+              f"  |  АВТО k={learned_k(auto)} {exam_score(auto,glue)}   [{info}]")
+
+elif __name__ == "__main__":
     world = sys.argv[1] if len(sys.argv) > 1 else "last/baloon2"
     seed_k = int(sys.argv[2]) if len(sys.argv) > 2 else 3
     glue = make_glue(load_spec(f"worlds/{world}.yaml"))
