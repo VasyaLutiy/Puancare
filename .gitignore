@@ -1,0 +1,11 @@
+.env
+worldforge/.env
+.venv/
+.DS_Store
+__pycache__/
+
+# генерируемые артефакты шкафа/станка (регенерируемы; не в коммит)
+shelf/
+exams_ledger.jsonl
+worldforge/in/
+worldforge/out/
