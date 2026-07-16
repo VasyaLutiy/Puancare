@@ -83,18 +83,36 @@ def _comp_d(A, B, c):
     return _padL1(_vals(A, c), _vals(B, c))
 
 
+def _ks_norm(S):
+    """Ключи "ks" -> int. JSON-раундтрип превращает int-ключи в строки —
+    без нормализации пересечение срезов живой подписи ({2,3,4}) и карточки
+    ({'2','3','4'}) пусто, и мульти-k сравнение молча выключается (улов
+    арки ворот: карточки полки сравнивались фолбэком)."""
+    if "ks" in S and any(isinstance(k, str) for k in S["ks"]):
+        S = dict(S)
+        S["ks"] = {int(k): v for k, v in S["ks"].items()}
+    return S
+
+
+def comp_dist(A, B, c):
+    """Дистанция ОДНОЙ компоненты двух подписей, в её собственных единицах.
+    Мульти-k: среднее по общим k (сравнение только при совпадающем k)."""
+    A, B = _ks_norm(A), _ks_norm(B)
+    if "ks" in A and "ks" in B:
+        shared = sorted(set(A["ks"]) & set(B["ks"]))
+        if shared:
+            return sum(_comp_d(A["ks"][k], B["ks"][k], c)
+                       for k in shared) / len(shared)
+    return _comp_d(A, B, c)
+
+
 def _pair_d(A, B, w):
     """Расстояние двух подписей. Мульти-k (поле "ks"): среднее по ОБЩИМ k
     сравнений при СОВПАДАЮЩЕМ k — паддинга между разными k нет по
     построению, флип выбора k теряет силу (арка линзы: волк f0006 и ложный
     отказ b04-m04 были взрывом паддинга при k-несовпадении). Одиночные
     подписи сравниваются как раньше."""
-    if "ks" in A and "ks" in B:
-        shared = sorted(set(A["ks"]) & set(B["ks"]))
-        if shared:
-            return sum(sum(w[c] * _comp_d(A["ks"][k], B["ks"][k], c)
-                           for c in COMPS) for k in shared) / len(shared)
-    return sum(w[c] * _comp_d(A, B, c) for c in COMPS)
+    return sum(w[c] * comp_dist(A, B, c) for c in COMPS)
 
 
 def calibrate(sigs):
@@ -106,21 +124,12 @@ def calibrate(sigs):
         вес только когда межмировой разброс БОЛЬШЕ средней болтанки —
         иначе калибровка инвертирует шум почти-константы (osc: округление
         0.001 давало вес 1000 и травило радиус)."""
-    sigs = list(sigs)
+    sigs = [_ks_norm(s) for s in sigs]
     pairs = [(a, b) for i, a in enumerate(sigs) for b in sigs[i + 1:]]
     w = {}
     for c in COMPS:
         if pairs:
-            if all("ks" in s for s in (x for p in pairs for x in p)):
-                ds = []
-                for a, b in pairs:
-                    shared = sorted(set(a["ks"]) & set(b["ks"]))
-                    if shared:
-                        ds.append(sum(_comp_d(a["ks"][k], b["ks"][k], c)
-                                      for k in shared) / len(shared))
-                m = sum(ds) / len(ds) if ds else 0.0
-            else:
-                m = sum(_comp_d(a, b, c) for a, b in pairs) / len(pairs)
+            m = sum(comp_dist(a, b, c) for a, b in pairs) / len(pairs)
         else:
             m = 0.0
         noise = [s["noise"][c] for s in sigs
