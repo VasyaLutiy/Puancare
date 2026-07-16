@@ -24,34 +24,114 @@ I(состояние;исход)/H, что в sig: эмиссии — это к�
 
 import sys
 import math
-
-import numpy as np
+from math import fsum
 
 import sig                          # best_axis, signature (для сравнения)
 
 
+# --- спектр без BLAS -------------------------------------------------------
+# np.linalg.eigvals удалён: LAPACK-бэкенды дают разные последние биты
+# (доказано: OpenBLAS-Linux vs Accelerate-мак расходятся на 1-5 ulp на
+# одной и той же матрице), т.е. подпись формы зависела от сборки numpy.
+# Для k<=4 спектр считается аналитически: у стохастической T всегда λ₁=1;
+# остальные — корни дефлированного характеристического многочлена
+# (Фаддеев—Леверье + бисекция для кубики + точная квадратура). Только
+# +,-,*,/,sqrt — единственные операции, которые IEEE 754 обязывает
+# округлять точно ⇒ бит-в-бит на любой машине ПО ПОСТРОЕНИЮ.
+
+def _cabs(z):
+    """|z| через sqrt(re²+im²): abs(complex) ходит в hypot() из libm,
+    который не обязан совпадать между платформами; sqrt — обязан."""
+    return math.sqrt(z.real * z.real + z.imag * z.imag)
+
+
+def _charpoly(T):
+    """det(λI−T) = λ^k + c₁λ^(k−1) + ... + c_k (Фаддеев—Леверье)."""
+    k = len(T)
+    c = [1.0]
+    M = [[float(i == j) for j in range(k)] for i in range(k)]      # M₁ = I
+    for m in range(1, k + 1):
+        if m > 1:                                  # M_m = T·M_{m-1} + c·I
+            TM = [[fsum(T[i][x] * M[x][j] for x in range(k))
+                   for j in range(k)] for i in range(k)]
+            M = [[TM[i][j] + (c[-1] if i == j else 0.0)
+                  for j in range(k)] for i in range(k)]
+        TMm = [[fsum(T[i][x] * M[x][j] for x in range(k))
+                for j in range(k)] for i in range(k)]
+        c.append(-fsum(TMm[i][i] for i in range(k)) / m)
+    return c
+
+
+def _quad_roots(p, q):
+    """Корни λ² + pλ + q = 0 (вещ. p, q)."""
+    D = p * p - 4.0 * q
+    if D >= 0.0:
+        sd = math.sqrt(D)
+        return [complex((-p + sd) / 2.0, 0.0), complex((-p - sd) / 2.0, 0.0)]
+    sd = math.sqrt(-D)
+    return [complex(-p / 2.0, sd / 2.0), complex(-p / 2.0, -sd / 2.0)]
+
+
+def _cubic_roots(a, b, c):
+    """Корни λ³ + aλ² + bλ + c = 0. Вещественный корень — бисекцией
+    (у цепи |λ|<=1, поэтому p(-2)<0<p(2) гарантированно; только
+    арифметика — никаких cbrt/acos из libm), остальные — дефляцией
+    в квадратуру."""
+    def p(x):
+        return ((x + a) * x + b) * x + c
+    lo, hi = -2.0, 2.0
+    neg = p(lo) < 0.0
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        if mid == lo or mid == hi:
+            break
+        if (p(mid) < 0.0) == neg:
+            lo = mid
+        else:
+            hi = mid
+    r = 0.5 * (lo + hi)
+    p2 = a + r                       # λ³+aλ²+bλ+c = (λ−r)(λ²+p2·λ+q2)
+    q2 = b + r * p2
+    return [complex(r, 0.0)] + _quad_roots(p2, q2)
+
+
 def spectrum(ax):
-    """Собственные значения T, доминантный (|λ|≈1) первым."""
-    ev = np.linalg.eigvals(np.array(ax.T(), dtype=float))
-    return sorted(ev, key=lambda z: -abs(z))
+    """Собственные значения T, доминантный (λ₁=1) первым. Аналитически,
+    без numpy/BLAS — см. блок выше."""
+    T = ax.T()
+    k = len(T)
+    if k == 1:
+        return [complex(1.0, 0.0)]
+    c = _charpoly(T)
+    b = [1.0]                                     # деление на (λ − 1)
+    for i in range(1, k):
+        b.append(c[i] + b[-1])
+    if k == 2:
+        roots = [complex(-b[1], 0.0)]
+    elif k == 3:
+        roots = _quad_roots(b[1], b[2])
+    else:
+        roots = _cubic_roots(b[1], b[2], b[3])
+    ev = [complex(1.0, 0.0)] + roots
+    return sorted(ev, key=lambda z: -_cabs(z))
 
 
 def signature(ax):
     k = ax.k
     ev = spectrum(ax)
     sub = ev[1:]                                  # выбросить λ₁≈1 (стационар)
-    spec = sorted(float(round(abs(z), 3)) for z in sub)  # магнитуды мод релакс.
+    spec = sorted(float(round(_cabs(z), 3)) for z in sub)  # магнитуды мод рел.
     osc = sorted(float(round(abs(z.imag), 3)) for z in sub)  # осцилляция мод
     # время релаксации медленнейшей моды — горизонт памяти (для показа)
-    slow = float(max((abs(z) for z in sub), default=0.0))
+    slow = float(max((_cabs(z) for z in sub), default=0.0))
     tau = (-1.0 / math.log(slow)) if 0 < slow < 1 else 0.0
     # наблюдаемая сторона: резкость эмиссий (как sig), стационар для веса
     pi = sig.stationary(ax)
-    Hs = -sum(p * math.log(p) for p in pi if p > 0) or 1e-12
+    Hs = -fsum(p * math.log(p) for p in pi if p > 0) or 1e-12
     sharp, ncards = [], []
     for a in ax.actions:
         results = ax.res_a[a]
-        Pr = {r: sum(pi[s] * ax.emis_p(s, a, r) for s in range(k))
+        Pr = {r: fsum(pi[s] * ax.emis_p(s, a, r) for s in range(k))
               for r in results}
         I = 0.0
         for s in range(k):
@@ -76,7 +156,7 @@ def _padL1(x, y):
     n = max(len(x), len(y))
     x = x + [0.0] * (n - len(x))
     y = y + [0.0] * (n - len(y))
-    return sum(abs(a - b) for a, b in zip(sorted(x), sorted(y)))
+    return fsum(abs(a - b) for a, b in zip(sorted(x), sorted(y)))
 
 
 def _comp_d(A, B, c):
@@ -101,8 +181,8 @@ def comp_dist(A, B, c):
     if "ks" in A and "ks" in B:
         shared = sorted(set(A["ks"]) & set(B["ks"]))
         if shared:
-            return sum(_comp_d(A["ks"][k], B["ks"][k], c)
-                       for k in shared) / len(shared)
+            return fsum(_comp_d(A["ks"][k], B["ks"][k], c)
+                        for k in shared) / len(shared)
     return _comp_d(A, B, c)
 
 
@@ -112,7 +192,7 @@ def _pair_d(A, B, w):
     построению, флип выбора k теряет силу (арка линзы: волк f0006 и ложный
     отказ b04-m04 были взрывом паддинга при k-несовпадении). Одиночные
     подписи сравниваются как раньше."""
-    return sum(w[c] * comp_dist(A, B, c) for c in COMPS)
+    return fsum(w[c] * comp_dist(A, B, c) for c in COMPS)
 
 
 def calibrate(sigs):
@@ -129,7 +209,7 @@ def calibrate(sigs):
     w = {}
     for c in COMPS:
         if pairs:
-            m = sum(comp_dist(a, b, c) for a, b in pairs) / len(pairs)
+            m = fsum(comp_dist(a, b, c) for a, b in pairs) / len(pairs)
         else:
             m = 0.0
         noise = [s["noise"][c] for s in sigs

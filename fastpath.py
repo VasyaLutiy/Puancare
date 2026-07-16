@@ -16,6 +16,7 @@
 
 import sys
 import time
+from math import fsum
 
 import runworld
 import koopman
@@ -132,7 +133,7 @@ def quick_signature(glue, budget, ks=(2, 3, 4), acts=None):
             ds.append(max((koopman._comp_d(a, b, c)
                            for i, a in enumerate(sgs) for b in sgs[i + 1:]),
                           default=0.0))
-        noise[c] = sum(ds) / len(ds) if ds else 0.0
+        noise[c] = fsum(ds) / len(ds) if ds else 0.0
     sig["noise"] = noise
     return sig, fits[k]
 
