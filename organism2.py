@@ -484,12 +484,16 @@ class Axis:
         return gammas, ll
 
 
-def _cluster_signatures(sigs):
+def _cluster_signatures(sigs, first_seen):
     """Жадная склейка совместимых подписей {действие: результат} —
     стартовая точка для EM (сшивка состояний между действиями идёт от
-    объектов, измеренных несколькими симптомами). Решений не принимает."""
+    объектов, измеренных несколькими симптомами). Решений не принимает.
+    Tie-break — НЕМОЙ: время первого появления объекта в дневнике
+    (уникально: глобальный счётчик шагов), не имя — иначе переименование
+    мира меняло порядок склейки и стартовую точку EM."""
     clusters = []
-    for obj, s in sorted(sigs.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+    for obj, s in sorted(sigs.items(),
+                         key=lambda kv: (-len(kv[1]), first_seen[kv[0]])):
         for msig, objs in clusters:
             shared = set(s) & set(msig)
             if shared and all(s[a] == msig[a] for a in shared):
@@ -627,15 +631,22 @@ def _hazard_mle(ax, s, pairs_ev):
 def fit_axis(actions, timelines, k, restarts=2, iters=5):
     """EM: таблица ответов + кубики. timelines: {obj: [(t, a, r), ...]}.
 
-    res_a — упорядоченное множество: порядок ПЕРВОГО ПОЯВЛЕНИЯ результата
-    в прожитой трассе, не алфавит (арка немоты F2: rng-старт эмиссий по
-    sorted(res_a) делал форму функцией лексикографии слов мира — изоморф
-    с обращённым алфавитом давал другие биты; порядок появления у
-    изоморфных жизней одинаков по построению)."""
-    res_a = defaultdict(dict)
-    for tl in timelines.values():
-        for (_t, a, r) in tl:
-            res_a[a].setdefault(r, None)
+    Канонические порядки внутри — НЕМЫЕ (немота по построению, F2):
+    результат действия и объект упорядочены ВРЕМЕНЕМ первого появления в
+    дневнике, не лексикографией слов — иначе rng-старт эмиссий и tie-break
+    склейки зависели от алфавита мира (k-флип и EM-дрейф на обращённом
+    алфавите). Слияние двух параллельных арок F2 (16.07): res_a —
+    упорядоченное множество (список по времени появления), дальше по
+    течению ни одного sorted() по словам."""
+    first_r = defaultdict(dict)          # a -> {r: t первого появления}
+    first_seen = {}                      # obj -> t первого появления
+    for obj, tl in timelines.items():
+        for (t, a, r) in tl:
+            if r not in first_r[a]:
+                first_r[a][r] = t
+            if obj not in first_seen or t < first_seen[obj]:
+                first_seen[obj] = t
+    res_a = {a: sorted(rs, key=rs.get) for a, rs in first_r.items()}
     n_obs = sum(len(tl) for tl in timelines.values())
     n_pairs = sum(max(0, len(tl) - 1) for tl in timelines.values())
     # со-подписи объектов (последний результат по каждому действию) —
@@ -647,7 +658,7 @@ def fit_axis(actions, timelines, k, restarts=2, iters=5):
             s[a] = r
         if s:
             sigs[obj] = s
-    clusters = _cluster_signatures(sigs)
+    clusters = _cluster_signatures(sigs, first_seen)
     best = None
     for rs in range(restarts):
         rng = random.Random(rs)
@@ -667,6 +678,9 @@ def fit_axis(actions, timelines, k, restarts=2, iters=5):
                     ax.emis[(s, a)] = {r: cnt.get(r, 0.0) + 0.5
                                        for r in res_a[a]}
                 else:
+                    # порядок раздачи rng — по времени первого появления
+                    # результата (немой, порядок списка res_a), не по
+                    # алфавиту слов
                     ax.emis[(s, a)] = {r: 0.5 + rng.random()
                                        for r in res_a[a]}
             ax.haz[s] = 0.05 if k > 1 else 0.0

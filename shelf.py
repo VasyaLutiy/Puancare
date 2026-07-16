@@ -130,8 +130,20 @@ class Shelf:
         n = sig.get("noise") or {}
         return sum(w[c] * n.get(c, 0.0) for c in koopman.COMPS)
 
-    @staticmethod
-    def pair_import(sig, donor_sig):
+    # Компоненты парного теста: только динамика (spec/osc) и словарь
+    # исходов (ncards). sharp ИСКЛЮЧЁН: I/H — plug-in-оценка со смещением,
+    # зависящим от ОБЪЁМА данных (сглаживание +0.5 в эмиссиях); линза
+    # донора заморожена на SIG_BUDGET=1000, цель меряется на своём бюджете,
+    # и тест сравнивал смещение(1000) со смещением(b) — «два прибора на
+    # разных выдержках». d_sharp пары РАСТЁТ с бюджетом цели, а шумовой
+    # лимит сжимается → любой изоморф терял ВВОЗ на 600+ (развёртка
+    # probe_gate: 3 патологич. + контрольная тройки, ломалась sharp в 6
+    # переломах из 7). В узнавании полки (d1/радиус) sharp остаётся —
+    # там все карточки меряны одной выдержкой SIG_BUDGET.
+    PAIR_COMPS = tuple(c for c in koopman.COMPS if c != "sharp")
+
+    @classmethod
+    def pair_import(cls, sig, donor_sig):
         """ПАРНЫЙ тест ввоза (арка ворот): «запрос неотличим от донора с
         точностью до измеренного шума пары» — покомпонентно, в собственных
         единицах компоненты, БЕЗ весов полки и БЕЗ радиуса.
@@ -144,7 +156,7 @@ class Shelf:
         радиусные ворота)."""
         if not (sig.get("noise") and donor_sig.get("noise")):
             return None
-        for c in koopman.COMPS:
+        for c in cls.PAIR_COMPS:
             d = koopman.comp_dist(sig, donor_sig, c)
             lim = (sig["noise"].get(c, 0.0) + donor_sig["noise"].get(c, 0.0))
             if d > lim:
