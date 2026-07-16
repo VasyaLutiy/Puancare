@@ -93,8 +93,30 @@ def run_triad(sh, donor_w, probe_w, exam_w, ledger=LEDGER, verbose=True):
     # на полку — только если донор НОВ (иначе изоморф раздует полку, ТЗ реш.#1)
     probe_lens = card_mod.recog_sig(donor_card)
     nov = sh.recognize(probe_lens).decision == "ОТКАЗ"
+    quarantined = None
     if nov:
-        sh.add(donor_card)
+        # карантин (ТЗ §7, N2): новизна ложится на полку только после
+        # проверки стабильности ВТОРЫМ СИДОМ — та же анкета и бюджет,
+        # другая прожитая жизнь; нестабильная форма полку не пополняет
+        # (экзамен всё равно идёт: ввоз — только от эфемерного донора)
+        org2 = runworld.live(glue_donor, False, db, seed=1)
+        _, ax2 = axis_with(org2, ask)
+        if ax2 is None:
+            quarantined = sh.quarantine(
+                donor_card, f"второй сид (seed=1, бюджет {db}) не открыл форму")
+        else:
+            c2 = card_mod.build(org2, glue_donor, origin=donor_w,
+                                discovery={"budget": db, "seed": 1})
+            if Shelf.stable(probe_lens, card_mod.recog_sig(c2),
+                            sh.weights(), sh.radius()):
+                sh.add(donor_card)
+            else:
+                quarantined = sh.quarantine(
+                    donor_card, "подпись нестабильна между сидами (seed 0 vs 1)")
+    if quarantined:
+        nov = False
+        if verbose:
+            print(f"  донор нов, но НЕ стабилен — карантин: {quarantined}")
 
     glue_probe = glue_of(probe_w)
     rows, results = [], []

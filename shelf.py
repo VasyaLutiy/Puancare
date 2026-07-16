@@ -166,7 +166,12 @@ class Shelf:
                       честной дрожи 0.37 против радиуса 0.16 был казнью за
                       бедность данных, не за чужую форму.
           ОТКАЗ     — иначе (новая форма)."""
-        extra = (donor,) if donor is not None else ()
+        # донор-двойник (N3): если донор уже лёг на полку (тот же origin),
+        # второй раз в калибровку/радиус/сравнение он не входит — пара
+        # d=0 сжимала средний зазор, раздувала веса и THIN-счёт
+        on_shelf = donor is not None and any(
+            c.get("origin") == donor.get("origin") for c in self._cards)
+        extra = (donor,) if donor is not None and not on_shelf else ()
         w = self.weights(extra)
         rad = self.radius(extra)
         jit = self._jitter(sig, w)
