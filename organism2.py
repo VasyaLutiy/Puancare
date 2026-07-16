@@ -80,25 +80,45 @@ class Ruleset:
         """Эпизод, хранимый как есть, = максимально специфичное правило."""
         return self._rule_cost(a, ctx)
 
-    def _resid_cost(self, ctx, a, m):
-        """Необъяснённый эпизод, виденный m раз: либо запомнить его как
-        специфичное правило (и дальше он предсказан), либо платить за
-        каждый сюрприз. log P(история) — история, не множество уникальных
-        строк: повтор противоречия стоит на каждом повторе."""
-        return min(self._raw_cost(ctx, a), m * self.out_bits(a))
+    def _group_resid(self, ctx, a, oms, explained):
+        """ЕДИНСТВЕННАЯ семантика остатка (арка F3): цена необъяснённых
+        строк одной группы (ctx, действие). oms: [(исход, m)]. Каждая
+        строка платит полный сюрприз m·out_bits; кап «запомнить как
+        специфичное правило» валиден лишь для ОДНОЙ строки группы —
+        правила о прочих исходах того же ctx взаимоисключающи — И только
+        когда НИ ОДНА строка группы не предсказана верно (explained=False):
+        специфичное правило-запоминалка перекрыло бы верное предсказание
+        строки-сестры того же ctx, т.е. для смеси под работающим правилом
+        капа нет — меньшинство платит полный сюрприз на каждом повторе
+        (иначе незнание снова продаётся по цене знания, теперь через путь
+        правил — чёрный ход дефекта 07935fe). При точной ничьей экономия
+        капа делится поровну между претендентами: выбор любимчика по имени
+        исхода — лексикография слов мира (F2). Потребители: судья
+        (total_bits) и майнер (_best_rule) — по-строчный min-кап у майнера
+        занижал цену беспорядка и давал ложные отказы правилам, которые
+        судья бы окупил."""
+        full = {o: m * self.out_bits(a) for o, m in oms}
+        if explained:
+            return full
+        raw = self._raw_cost(ctx, a)
+        smax = max(f - min(raw, f) for f in full.values())
+        if smax <= 0.0:
+            return full
+        ties = [o for o, f in full.items() if f - min(raw, f) == smax]
+        share = smax / len(ties)
+        return {o: f - share if o in ties else f for o, f in full.items()}
 
     # ---------- консолидация ----------
 
     def consolidate(self):
         self._vocab()
         self.rules = []
-        by_action = defaultdict(list)
+        by_action = defaultdict(lambda: defaultdict(list))
         for (ctx, a, o), m in self.episodes.items():
-            by_action[a].append((ctx, o, m))
-        for a, eps in sorted(by_action.items()):
-            remaining = list(eps)
-            while remaining:
-                best = self._best_rule(a, remaining)
+            by_action[a][ctx].append((o, m))
+        for a, groups in sorted(by_action.items()):
+            while True:
+                best = self._best_rule(a, groups)
                 if best is None:
                     break
                 conds, outcome, correct, exceptions, gain = best
@@ -107,41 +127,87 @@ class Ruleset:
                     "support": len(correct), "exceptions": len(exceptions),
                     "gain": gain,
                 })
-                remaining = [e for e in remaining if e not in correct]
+            # опора/исключения — семантикой РЕШАЮЩЕГО СПИСКА: правило
+            # отвечает лишь за группы, где оно победитель predict; счётчики
+            # добычи приписали бы ∅-правилу строки, которые позже объяснит
+            # перекрытие (и раздули бы uncertainty)
+            arules = [r for r in self.rules if r["action"] == a]
+            for r in arules:
+                r["support"] = r["exceptions"] = 0
+            for ctx, oms in groups.items():
+                p = self.predict(ctx, a)
+                if p is None:
+                    continue
+                for (o, _m) in oms:
+                    if o == p["outcome"]:
+                        p["support"] += 1
+                    else:
+                        p["exceptions"] += 1
         return self.rules
 
-    def _best_rule(self, a, eps):
-        # один агрегатный проход: кандидат = ∅ / предикат / пара
-        # предикатов ИЗ КОНТЕКСТА эпизода (другие всё равно не накроют)
-        stats = {}
-        for ctx, o, m in eps:
-            resid = self._resid_cost(ctx, a, m)
+    def _best_rule(self, a, groups):
+        # Выигрыш кандидата = ЧЕСТНАЯ дельта судьи (арка F3, одна
+        # семантика остатка). Условия кандидата — подмножество ctx, поэтому
+        # группа (ctx, a) покрывается целиком; но кандидат ВЫСТРЕЛИВАЕТ
+        # только там, где он строго специфичнее текущего победителя predict
+        # (при равной специфичности читается раньше добытое — новичок в
+        # тени и не объясняет НИЧЕГО; теневые правила себе выигрыш не
+        # пишут). В выстрелившей группе необъяснённое ДО — строки мимо
+        # текущего победителя, ПОСЛЕ — строки мимо кандидата: воскрешение
+        # уже объяснённых строк оплачивается, остаток выживших
+        # пересчитывается той же _group_resid (кап достаётся заново).
+        #   gain = Σ по выстрелившим группам [остаток ДО − остаток ПОСЛЕ]
+        #          − цена правила.
+        win = {}
+        for ctx in groups:
+            m_ = [(len(r["conds"]), -i, r["outcome"])
+                  for i, r in enumerate(self.rules)
+                  if r["action"] == a and r["conds"] <= ctx]
+            win[ctx] = max(m_) if m_ else None
+        wrong, before = {}, {}
+        for ctx, oms in groups.items():
+            w = win[ctx]
+            bad = [(o, m) for o, m in oms if w is None or o != w[2]]
+            wrong[ctx] = bad
+            expl = w is not None and len(bad) < len(oms)
+            before[ctx] = (sum(self._group_resid(ctx, a, bad, expl).values())
+                           if bad else 0.0)
+        # кандидаты — из групп, где есть необъяснённое (иначе выигрыша нет)
+        cands = set()
+        for ctx, bad in wrong.items():
+            if not bad:
+                continue
             preds = sorted(ctx)
-            cands = [()]
-            cands += [(p,) for p in preds]
+            cands.add(())
+            cands.update((p,) for p in preds)
             if MAX_CONDS >= 2:
-                cands += [(p, q) for i_, p in enumerate(preds)
-                          for q in preds[i_ + 1:]]
-            for c in cands:
-                st = stats.get(c)
-                if st is None:
-                    st = stats[c] = [Counter(), defaultdict(float)]
-                st[0][o] += m
-                st[1][o] += resid
+                cands.update((p, q) for i_, p in enumerate(preds)
+                             for q in preds[i_ + 1:])
         best, best_gain = None, 0.0
-        for c, (w, rs) in stats.items():
-            outcome, _n = w.most_common(1)[0]
-            gain = (rs[outcome]
-                    - self._rule_cost(a, frozenset(c))
-                    - (sum(rs.values()) - rs[outcome]))
-            if gain > best_gain:
-                best_gain = gain
-                best = (c, outcome)
+        for c in sorted(cands):
+            cs = frozenset(c)
+            fired = [ctx for ctx in groups
+                     if cs <= ctx
+                     and (win[ctx] is None or len(cs) > win[ctx][0])]
+            if not fired:
+                continue
+            outs = {o for ctx in fired for (o, _m) in wrong[ctx]}
+            for outcome in sorted(outs):
+                gain = -self._rule_cost(a, cs)
+                for ctx in fired:
+                    rest = [(o, m) for o, m in groups[ctx] if o != outcome]
+                    expl = len(rest) < len(groups[ctx])
+                    after = (sum(self._group_resid(ctx, a, rest,
+                                                   expl).values())
+                             if rest else 0.0)
+                    gain += before[ctx] - after
+                if gain > best_gain:
+                    best_gain = gain
+                    best = (cs, outcome, fired)
         if best is None:
             return None
-        conds = frozenset(best[0])
-        outcome = best[1]
-        covered = [e for e in eps if conds <= e[0]]
+        conds, outcome, fired = best
+        covered = [(ctx, o, m) for ctx in fired for (o, m) in groups[ctx]]
         correct = [e for e in covered if e[1] == outcome]
         exceptions = [e for e in covered if e[1] != outcome]
         return conds, outcome, correct, exceptions, best_gain
@@ -149,26 +215,29 @@ class Ruleset:
     def total_bits(self):
         """Полная длина описания пережитой истории этим набором правил.
 
-        Остаток считается ГРУППОЙ по (ctx, действие): кап «запомнить как
-        специфичное правило» валиден лишь для ОДНОЙ строки группы —
-        правила о прочих исходах того же ctx взаимоисключающи, их повторы
-        платят полный сюрприз m·out_bits. Прежний по-строчный min-кап
-        продавал незнание по цене знания (смесь исходов под одним ctx —
-        а это и есть скрытое состояние — почти бесплатна), из-за чего ось
-        не окупалась никогда: отказ hard1 при +270 битах у форс-фита и
-        немонотонность приёмки по бюджету (тумблер 1500+/2000−, насыщение
-        капа). Арка судьи, 15.07.2026; диагностика — judge_probe.py."""
+        Остаток — через _group_resid (одна семантика с майнером, арка F3):
+        кап «запомнить как специфичное правило» валиден лишь для ОДНОЙ
+        строки группы (ctx, действие) — правила о прочих исходах того же
+        ctx взаимоисключающи, их повторы платят полный сюрприз m·out_bits.
+        Прежний по-строчный min-кап продавал незнание по цене знания
+        (смесь исходов под одним ctx — а это и есть скрытое состояние —
+        почти бесплатна), из-за чего ось не окупалась никогда: отказ hard1
+        при +270 битах у форс-фита и немонотонность приёмки по бюджету
+        (тумблер 1500+/2000−, насыщение капа). Арка судьи, 15.07.2026;
+        диагностика — judge_probe.py."""
         bits = sum(self._rule_cost(r["action"], r["conds"])
                    for r in self.rules)
         groups = defaultdict(list)
+        explained = set()
         for (ctx, a, o), m in self.episodes.items():
             p = self.predict(ctx, a)
             if p is None or p["outcome"] != o:
-                groups[(ctx, a)].append(m * self.out_bits(a))
-        for (ctx, a), full in groups.items():
-            raw = self._raw_cost(ctx, a)
-            save = max((f - min(raw, f)) for f in full)   # кап — одной строке
-            bits += sum(full) - save
+                groups[(ctx, a)].append((o, m))
+            else:
+                explained.add((ctx, a))
+        for (ctx, a), oms in groups.items():
+            bits += sum(self._group_resid(ctx, a, oms,
+                                          (ctx, a) in explained).values())
         return bits
 
     # ---------- извлечение (семантика memory.py, без изменений) ----------
