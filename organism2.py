@@ -369,12 +369,16 @@ class Axis:
         return gammas, ll
 
 
-def _cluster_signatures(sigs):
+def _cluster_signatures(sigs, first_seen):
     """Жадная склейка совместимых подписей {действие: результат} —
     стартовая точка для EM (сшивка состояний между действиями идёт от
-    объектов, измеренных несколькими симптомами). Решений не принимает."""
+    объектов, измеренных несколькими симптомами). Решений не принимает.
+    Tie-break — НЕМОЙ: время первого появления объекта в дневнике
+    (уникально: глобальный счётчик шагов), не имя — иначе переименование
+    мира меняло порядок склейки и стартовую точку EM."""
     clusters = []
-    for obj, s in sorted(sigs.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+    for obj, s in sorted(sigs.items(),
+                         key=lambda kv: (-len(kv[1]), first_seen[kv[0]])):
         for msig, objs in clusters:
             shared = set(s) & set(msig)
             if shared and all(s[a] == msig[a] for a in shared):
@@ -510,11 +514,22 @@ def _hazard_mle(ax, s, pairs_ev):
 
 
 def fit_axis(actions, timelines, k, restarts=2, iters=5):
-    """EM: таблица ответов + кубики. timelines: {obj: [(t, a, r), ...]}."""
+    """EM: таблица ответов + кубики. timelines: {obj: [(t, a, r), ...]}.
+
+    Канонические порядки внутри — НЕМЫЕ (немота по построению): результат
+    действия и объект упорядочены временем первого появления в дневнике,
+    а не лексикографией слов — иначе rng-старт эмиссий и tie-break склейки
+    зависели от алфавита мира (k-флип и EM-дрейф на обращённом алфавите)."""
     res_a = defaultdict(set)
-    for tl in timelines.values():
-        for (_t, a, r) in tl:
+    res_ord = defaultdict(dict)          # a -> {r: t первого появления}
+    first_seen = {}                      # obj -> t первого появления
+    for obj, tl in timelines.items():
+        for (t, a, r) in tl:
             res_a[a].add(r)
+            if r not in res_ord[a]:
+                res_ord[a][r] = t
+            if obj not in first_seen or t < first_seen[obj]:
+                first_seen[obj] = t
     n_obs = sum(len(tl) for tl in timelines.values())
     n_pairs = sum(max(0, len(tl) - 1) for tl in timelines.values())
     # со-подписи объектов (последний результат по каждому действию) —
@@ -526,7 +541,7 @@ def fit_axis(actions, timelines, k, restarts=2, iters=5):
             s[a] = r
         if s:
             sigs[obj] = s
-    clusters = _cluster_signatures(sigs)
+    clusters = _cluster_signatures(sigs, first_seen)
     best = None
     for rs in range(restarts):
         rng = random.Random(rs)
@@ -546,8 +561,11 @@ def fit_axis(actions, timelines, k, restarts=2, iters=5):
                     ax.emis[(s, a)] = {r: cnt.get(r, 0.0) + 0.5
                                        for r in res_a[a]}
                 else:
+                    # порядок раздачи rng — по времени первого появления
+                    # результата (немой), не по алфавиту слов
                     ax.emis[(s, a)] = {r: 0.5 + rng.random()
-                                       for r in sorted(res_a[a])}
+                                       for r in sorted(res_a[a],
+                                                       key=res_ord[a].get)}
             ax.haz[s] = 0.05 if k > 1 else 0.0
             ax.tgt[s] = [0.0 if j == s else 1.0 / max(1, k - 1)
                          for j in range(k)]
