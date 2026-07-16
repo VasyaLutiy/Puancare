@@ -789,6 +789,9 @@ class Organism:
         self.records = []
         self.hist = defaultdict(lambda: defaultdict(list))  # obj -> a -> [(r, t)]
         self.axes = []            # принятые судьёй тайные оси
+        self._park = {}           # блок -> вытесненная ось: судья вправе
+                                  # передумать (свежий EM-фит того же k может
+                                  # быть хуже ушедшего чемпиона — лотерея)
         self.problem_actions = set()
         self.R = set()
         self.steps = 0
@@ -970,6 +973,21 @@ class Organism:
                 memo[key] = (self._fit_block_min2(block) if min2
                              else self._fit_block(block))
             return memo[key]
+
+        def fit_k(block, k):
+            key = (tuple(block), "k", k)
+            if key not in memo:
+                tls = self._axis_timelines(block)
+                memo[key] = fit_axis(block, tls, k) if tls else None
+            return memo[key]
+
+        def ks_of(block):
+            res = self._block_results(block)
+            if not res:
+                return ()
+            k_max = min(4, max(len(rs) for rs in res.values()) + 1)
+            return range(2, max(2, k_max) + 1)
+
         def part_score(part):
             return fsum((lambda ax: ax.score if ax else 0.0)(fit(b))
                         for b in part)
@@ -1010,9 +1028,32 @@ class Organism:
             forced = [fit(b, min2=True) for b in best_part]
             forced = [ax for ax in forced if ax is not None]
             candidates.append(forced)
+            # Локальный счёт ПРЕДЛАГАЕТ, но не отбирает k (арка открытия
+            # колец, 17.07): _fit_block выдавал победителя локального EM,
+            # и глобально лучший k судье не предъявлялся вовсе — кольцо
+            # застревало в k=2-аппроксимации (b06-доноры: судья за k=3 на
+            # 46-330 бит, локальный score за k=2; кто открылся честно —
+            # лотерея траектории сна). Судье предъявляются ВСЕ k>=2
+            # лучшего разбиения, поблочно: кандидат = оси базы с заменой
+            # оси ОДНОГО блока на его фикс-k фит (линейно, не k^блоки).
+            for block in best_part:
+                others = [ax for ax in best_axes
+                          if set(ax.actions) != set(block)]
+                for kk in ks_of(block):
+                    axk = fit_k(block, kk)
+                    if axk is not None:
+                        candidates.append(others + [axk])
         joint = fit(acts, min2=True)
         if joint is not None:
             candidates.append([joint])
+        # joint — тоже по всем k, той же логикой (лотерея локального отбора
+        # симметрична: без этого текущей joint-оси некому предъявить её же
+        # блок с другим k, и откат от инфляции невозможен — flashing 5/7→4/7
+        # ловился ровно тут)
+        for kk in ks_of(acts):
+            axk = fit_k(acts, kk)
+            if axk is not None:
+                candidates.append([axk])
         # дедупликация по структуре
         seen, out = set(), []
         for cand in candidates:
@@ -1107,10 +1148,21 @@ class Organism:
         # приговор — глобальные биты
         if self.problem_actions:
             cands = self._structure(self.problem_actions)
+            # парк вытесненных осей: свежий EM-фит того же (блок, k) может
+            # быть хуже ушедшего чемпиона (лотерея рестартов) — приговор
+            # «сейчас лучше» не гарантирует лучшей асимптотики, и без парка
+            # дорога назад закрыта (flashing: ранний k=3 честно побил
+            # тогдашний k=2, а вернуться к нему стало не через что)
+            for p in self._park.values():
+                cands.append([ax for ax in self.axes
+                              if set(ax.actions) != set(p.actions)] + [p])
             for cand_axes in cands:
                 cand_mem = self._relabel(cand_axes)
                 cand_bits = self._total_bits(cand_axes, cand_mem)
                 if cand_bits < cur_bits:
+                    for old in self.axes:
+                        if old not in cand_axes:
+                            self._park[frozenset(old.actions)] = old
                     self.axes, self.mem = cand_axes, cand_mem
                     cur_bits = cand_bits
         # 3. реляционная абдукция — под тем же судьёй
