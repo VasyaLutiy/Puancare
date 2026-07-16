@@ -20,6 +20,7 @@ koopman.calibrate / repertoire.radius), пересчёт на каждое из�
 
 import os
 import json
+from math import fsum
 import tempfile
 
 import koopman
@@ -128,7 +129,7 @@ class Shelf:
         """Дрожь подписи в единицах дистанции: взвешенная сумма измеренной
         внутримировой болтанки компонент (поле noise, из половин данных)."""
         n = sig.get("noise") or {}
-        return sum(w[c] * n.get(c, 0.0) for c in koopman.COMPS)
+        return fsum(w[c] * n.get(c, 0.0) for c in koopman.COMPS)
 
     # Компоненты парного теста: только динамика (spec/osc) и словарь
     # исходов (ncards). sharp ИСКЛЮЧЁН: I/H — plug-in-оценка со смещением,

@@ -22,6 +22,7 @@ MAX_CONDS = 2 — обещание грамматики миров (WORLD_PROTOC
 from __future__ import annotations
 
 import math
+from math import fsum
 import random
 from collections import Counter, defaultdict
 from itertools import combinations
@@ -182,7 +183,7 @@ class Ruleset:
             bad = [(o, m) for o, m in oms if w is None or o != w[2]]
             wrong[ctx] = bad
             expl = w is not None and len(bad) < len(oms)
-            before[ctx] = (sum(self._group_resid(ctx, a, bad, expl).values())
+            before[ctx] = (fsum(self._group_resid(ctx, a, bad, expl).values())
                            if bad else 0.0)
         # кандидаты — из групп, где есть необъяснённое (иначе выигрыша нет)
         cands = set()
@@ -210,8 +211,8 @@ class Ruleset:
                 for ctx in fired:
                     rest = [(o, m) for o, m in groups[ctx] if o != outcome]
                     expl = len(rest) < len(groups[ctx])
-                    after = (sum(self._group_resid(ctx, a, rest,
-                                                   expl).values())
+                    after = (fsum(self._group_resid(ctx, a, rest,
+                                                    expl).values())
                              if rest else 0.0)
                     gain += before[ctx] - after
                 if gain > best_gain:
@@ -238,8 +239,8 @@ class Ruleset:
         при +270 битах у форс-фита и немонотонность приёмки по бюджету
         (тумблер 1500+/2000−, насыщение капа). Арка судьи, 15.07.2026;
         диагностика — judge_probe.py."""
-        bits = sum(self._rule_cost(r["action"], r["conds"])
-                   for r in self.rules)
+        bits = fsum(self._rule_cost(r["action"], r["conds"])
+                    for r in self.rules)
         groups = defaultdict(list)
         explained = set()
         for (ctx, a, o), m in self.episodes.items():
@@ -249,8 +250,8 @@ class Ruleset:
             else:
                 explained.add((ctx, a))
         for (ctx, a), oms in groups.items():
-            bits += sum(self._group_resid(ctx, a, oms,
-                                          (ctx, a) in explained).values())
+            bits += fsum(self._group_resid(ctx, a, oms,
+                                           (ctx, a) in explained).values())
         return bits
 
     # ---------- извлечение (семантика memory.py, без изменений) ----------
@@ -317,7 +318,7 @@ class Ruleset:
 
 def _matmul(A, B):
     k = len(A)
-    return [[sum(A[i][m] * B[m][j] for m in range(k)) for j in range(k)]
+    return [[fsum(A[i][m] * B[m][j] for m in range(k)) for j in range(k)]
             for i in range(k)]
 
 
@@ -333,7 +334,7 @@ def _matpow(A, n):
 
 
 def _norm(v):
-    s = sum(v)
+    s = fsum(v)
     return [x / s for x in v] if s > 0 else [1.0 / len(v)] * len(v)
 
 
@@ -358,7 +359,7 @@ class Axis:
 
     def emis_p(self, s, a, r):
         c = self.emis.get((s, a), {})
-        tot = sum(c.values())
+        tot = fsum(c.values())
         ra = max(2, len(self.res_a.get(a, ())) + (r not in self.res_a.get(a, ())))
         return (c.get(r, 0.0) + 0.5) / (tot + 0.5 * ra)
 
@@ -382,7 +383,7 @@ class Axis:
         if dt <= 0:
             return list(bel)
         Tdt = self.tpow(dt)
-        return [sum(bel[s] * Tdt[s][j] for s in range(self.k))
+        return [fsum(bel[s] * Tdt[s][j] for s in range(self.k))
                 for j in range(self.k)]
 
     def stationary(self, tol=1e-12, max_iters=10000):
@@ -393,7 +394,7 @@ class Axis:
             T = self.T()
             pi = [1.0 / self.k] * self.k
             for _ in range(max_iters):
-                nxt = _norm([sum(pi[s] * T[s][j] for s in range(self.k))
+                nxt = _norm([fsum(pi[s] * T[s][j] for s in range(self.k))
                              for j in range(self.k)])
                 if max(abs(a - b) for a, b in zip(nxt, pi)) < tol:
                     pi = nxt
@@ -411,8 +412,8 @@ class Axis:
             return list(bel)
         Tdt = self.tpow(dt)
         pi = self.stationary()
-        out = [pi[i] * sum(Tdt[i][j] * bel[j] / max(pi[j], 1e-300)
-                           for j in range(self.k))
+        out = [pi[i] * fsum(Tdt[i][j] * bel[j] / max(pi[j], 1e-300)
+                            for j in range(self.k))
                for i in range(self.k)]
         return _norm(out)
 
@@ -457,15 +458,15 @@ class Axis:
                 v = [emit[0][s] * self.pi[s] for s in range(k)]
             else:
                 prev = alpha[-1]
-                v = [sum(prev[s] * Ts[i][s][j] for s in range(k))
+                v = [fsum(prev[s] * Ts[i][s][j] for s in range(k))
                      * emit[i][j] for j in range(k)]
-            sc = sum(v) or 1e-300
+            sc = fsum(v) or 1e-300
             alpha.append([x / sc for x in v])
             scales.append(sc)
         beta = [[1.0] * k for _ in range(n)]
         for i in range(n - 2, -1, -1):
             sc = scales[i + 1]
-            beta[i] = [sum(Ts[i + 1][s][j] * emit[i + 1][j]
+            beta[i] = [fsum(Ts[i + 1][s][j] * emit[i + 1][j]
                            * beta[i + 1][j] for j in range(k)) / sc
                        for s in range(k)]
         gammas = [_norm([alpha[i][s] * beta[i][s] for s in range(k)])
@@ -475,9 +476,9 @@ class Axis:
             xi = [[alpha[i - 1][s] * Ts[i][s][j] * emit[i][j]
                    * beta[i][j] / scales[i]
                    for j in range(k)] for s in range(k)]
-            z = sum(sum(row) for row in xi) or 1e-300
+            z = fsum(fsum(row) for row in xi) or 1e-300
             xis.append([[x / z for x in row] for row in xi])
-        return gammas, xis, sum(math.log(sc) for sc in scales)
+        return gammas, xis, fsum(math.log(sc) for sc in scales)
 
     def smooth(self, timeline):
         gammas, _xis, ll = self.fb(timeline)
@@ -511,14 +512,14 @@ def _kt_regret(counts):
     (Кричевский–Трофимов) минус ML-сжатие. Точная конечная формула
     вместо асимптотики ½·log n: чёткой клетке у края дуги различимости
     честно дешевле — та самая геометрическая поправка юности."""
-    n = sum(counts)
+    n = fsum(counts)
     m = len(counts)
     if n <= 0 or m < 2:
         return 0.0
     kt = -(math.lgamma(m * 0.5) - m * math.lgamma(0.5)
-           + sum(math.lgamma(c + 0.5) for c in counts)
+           + fsum(math.lgamma(c + 0.5) for c in counts)
            - math.lgamma(n + m * 0.5)) / LN2
-    ml = -sum(c * math.log(c / n) for c in counts if c > 0) / LN2
+    ml = -fsum(c * math.log(c / n) for c in counts if c > 0) / LN2
     return max(0.0, kt - ml)
 
 
@@ -535,7 +536,7 @@ def _stay2(a, b, dt):
 
 
 _HAZ_PRIOR = [1.0 / math.sqrt(h * (1.0 - h)) for h in HAZ_GRID]
-_HAZ_PRIOR = [w / sum(_HAZ_PRIOR) for w in _HAZ_PRIOR]
+_HAZ_PRIOR = [w / fsum(_HAZ_PRIOR) for w in _HAZ_PRIOR]
 
 
 def _hazard_coordinate(ax, s, pairs_ev):
@@ -560,21 +561,21 @@ def _hazard_coordinate(ax, s, pairs_ev):
     if k == 2:
         b_ret = ax.haz[1 - s]
     else:
-        b_ret = sum(ax.haz[j] * ax.tgt[j][s]
-                    for j in range(k) if j != s) / (k - 1)
+        b_ret = fsum(ax.haz[j] * ax.tgt[j][s]
+                     for j in range(k) if j != s) / (k - 1)
     b_ret = min(max(b_ret, 1e-9), 0.5)
     lls = []
     for h in HAZ_GRID:
         ll = 0.0
         for dt, row in by_dt.items():
             stay = min(max(_stay2(h, b_ret, dt), 1e-12), 1.0 - 1e-12)
-            w_leave = sum(row) - row[s]
+            w_leave = fsum(row) - row[s]
             ll += row[s] * math.log(stay) + w_leave * math.log(1.0 - stay)
         lls.append(ll)
     m = max(lls)
     post = [math.exp(ll - m) * pw for ll, pw in zip(lls, _HAZ_PRIOR)]
-    z = sum(post)
-    h_hat = sum(h * w for h, w in zip(HAZ_GRID, post)) / z
+    z = fsum(post)
+    h_hat = fsum(h * w for h, w in zip(HAZ_GRID, post)) / z
     # длина кода смеси Джеффриса против кода точечной оценки
     mix_ll = m + math.log(z)
     i_hat = min(range(len(HAZ_GRID)), key=lambda i: abs(HAZ_GRID[i] - h_hat))
@@ -600,7 +601,7 @@ def _hazard_mle(ax, s, pairs_ev):
     if k == 2:
         b_ret = ax.haz[1 - s]
     else:
-        b_ret = min(max(sum(ax.haz[j] * ax.tgt[j][s]
+        b_ret = min(max(fsum(ax.haz[j] * ax.tgt[j][s]
                             for j in range(k) if j != s) / (k - 1),
                         1e-9), 0.5)
     rows = list(by_dt.items())
@@ -609,7 +610,7 @@ def _hazard_mle(ax, s, pairs_ev):
         out = 0.0
         for dt, row in rows:
             stay = min(max(_stay2(h, b_ret, dt), 1e-12), 1.0 - 1e-12)
-            out += row[s] * math.log(stay) + (sum(row) - row[s]) * math.log(1 - stay)
+            out += row[s] * math.log(stay) + (fsum(row) - row[s]) * math.log(1 - stay)
         return out
 
     lo, hi = HAZ_GRID[0], 0.5
@@ -709,7 +710,7 @@ def fit_axis(actions, timelines, k, restarts=2, iters=5):
                     xi = xis[i - 1]
                     pairs_ev.append((dt, xi))
                     for s in range(k):
-                        row_w[s] += sum(xi[s])
+                        row_w[s] += fsum(xi[s])
                         for j in range(k):
                             if j != s:
                                 tgt_w[s][j] += xi[s][j]
@@ -720,7 +721,7 @@ def fit_axis(actions, timelines, k, restarts=2, iters=5):
                 # Грид-регрет (Штраф Оккама) считаем ОДИН раз в конце —
                 # на каждой итерации нужна только оценка h.
                 ax.haz[s] = _hazard_mle(ax, s, pairs_ev) if k > 1 else 0.0
-                tot = sum(tgt_w[s][j] for j in range(k) if j != s)
+                tot = fsum(tgt_w[s][j] for j in range(k) if j != s)
                 ax.tgt[s] = [0.0 if j == s else
                              (tgt_w[s][j] + 0.5) / (tot + 0.5 * (k - 1))
                              for j in range(k)] if k > 1 else [0.0]
@@ -732,7 +733,7 @@ def fit_axis(actions, timelines, k, restarts=2, iters=5):
                       for s in range(k)]
         # Штраф Оккама оси: точный код смеси Джеффриса на клетку —
         # линейка различимости каждого параметра по ЕГО порции данных.
-        emis_bits = sum(
+        emis_bits = fsum(
             _kt_regret([ax.emis.get((s, a), {}).get(r, 0.0)
                         for r in res_a[a]])
             for s in range(k) for a in res_a)
@@ -859,7 +860,7 @@ class Organism:
                 bel = self.belief(i, obj, self.steps)
                 mb = max(bel)
                 s = bel.index(mb)
-                row = sum(ax.emis.get((s, a), {}).values())
+                row = fsum(ax.emis.get((s, a), {}).values())
                 g = max(g, (1.0 - mb) + mb / (1.0 + row))
         if obj is not None and a in self.object_actions:
             # со-измерение: пока есть необъяснённые действия, знание
@@ -883,7 +884,7 @@ class Organism:
                 obj = (ep, t) if a in self.object_actions else None
                 ctx = self.contextualize(self.ctx_fn(obs, a, t, kw), obj, ents)
                 weights.append(self._gain(ctx, obj, a))
-            if sum(weights) > 0:
+            if fsum(weights) > 0:
                 a, t, kw = self.rng.choices(space, weights=weights)[0]
             else:
                 a, t, kw = self.rng.choice(space)
@@ -970,8 +971,8 @@ class Organism:
                              else self._fit_block(block))
             return memo[key]
         def part_score(part):
-            return sum((lambda ax: ax.score if ax else 0.0)(fit(b))
-                       for b in part)
+            return fsum((lambda ax: ax.score if ax else 0.0)(fit(b))
+                        for b in part)
 
         if len(acts) <= 4:
             parts = _partitions(acts)
@@ -1076,7 +1077,7 @@ class Organism:
         """Штраф Оккама принятых осей в глобальном счёте: динамика
         (кубики, цели ухода, пи) и выбор k. Таблицу ответов не считаем —
         её уже оплачивают правила class->исход, дважды не берём."""
-        return sum(ax.pen_dyn for ax in axes)
+        return fsum(ax.pen_dyn for ax in axes)
 
     def _total_bits(self, axes, mem):
         return mem.total_bits() + self._axes_bits(axes)

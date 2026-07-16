@@ -14,6 +14,7 @@
 
 import sys
 import math
+from math import fsum
 
 import runworld
 from organism2 import Organism
@@ -26,8 +27,8 @@ def stationary(ax, iters=300):
     p = list(ax.pi)
     T = ax.T()
     for _ in range(iters):
-        p = [sum(p[s] * T[s][j] for s in range(ax.k)) for j in range(ax.k)]
-        z = sum(p) or 1.0
+        p = [fsum(p[s] * T[s][j] for s in range(ax.k)) for j in range(ax.k)]
+        z = fsum(p) or 1.0
         p = [x / z for x in p]
     return p
 
@@ -46,11 +47,11 @@ def signature(ax):
     directed = ((max(hz) - min(hz)) / (max(hz) + min(hz))
                 if max(hz) > 0 else 0.0)
     # роли действий: резкость = I(состояние;исход)/H(состояние)
-    Hs = -sum(p * math.log(p) for p in pi if p > 0) or 1e-12
+    Hs = -fsum(p * math.log(p) for p in pi if p > 0) or 1e-12
     sharp, ncards = [], []
     for a in ax.actions:
         results = ax.res_a[a]
-        Pr = {r: sum(pi[s] * ax.emis_p(s, a, r) for s in range(k))
+        Pr = {r: fsum(pi[s] * ax.emis_p(s, a, r) for s in range(k))
               for r in results}
         I = 0.0
         for s in range(k):
@@ -80,7 +81,7 @@ def dist(A, B, blind_k=False):
         n = max(len(x), len(y))
         x = x + [0.0] * (n - len(x))
         y = y + [0.0] * (n - len(y))
-        return sum(abs(a - b) for a, b in zip(sorted(x), sorted(y)))
+        return fsum(abs(a - b) for a, b in zip(sorted(x), sorted(y)))
     k_term = 0.0 if blind_k else 2.0 * abs(A["k"] - B["k"])
     return (k_term
             + 3.0 * abs(A["persist"] - B["persist"])
