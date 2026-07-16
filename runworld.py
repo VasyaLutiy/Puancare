@@ -11,7 +11,10 @@ import random
 import sys
 from collections import Counter
 
-from organism import Organism
+# Ядро по умолчанию — organism2 (Пожиратель Форм). Старое ядро organism.py
+# удалено при чистке ветки (эпоха v1); потребители и раньше перезаписывали
+# runworld.Organism = Organism своим ядром — этот дефолт лишь для CLI.
+from organism2 import Organism
 from worldkit import GenericWorld, load_spec, make_glue
 
 

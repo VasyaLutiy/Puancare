@@ -10,17 +10,25 @@ OpenRouter даёт единый OpenAI-совместимый эндпойнт 
 """
 
 import os
-import sys
 import json
 import time
 import urllib.request
 import urllib.error
 
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
 
-from utils_azure import _load_env          # тот же загрузчик .env, без дублей
+def _load_env(path):
+    """Минимальный загрузчик .env без зависимостей (втянут из utils_azure
+    при чистке ветки: utils_azure — внешний Azure-инструмент, не часть
+    Пожирателя, и он не был в git — станок ломался на чистом клоне)."""
+    if not path or not os.path.exists(path):
+        return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 _URL = "https://openrouter.ai/api/v1/chat/completions"
 _DEF_MODEL = "x-ai/grok-2-1212"
