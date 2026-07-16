@@ -158,7 +158,10 @@ T1 = [
     ("comp4/donor", "comp4/target_probe", "comp4/target", "ОТКАЗ"),
     ("hard1/donor", "hard1/target_probe", "hard1/target", "ВВОЗ"),
     ("hard2/donor", "hard2/target_probe", "hard2/target", "ВВОЗ"),
-    ("hard3/donor", "hard3/target_probe", "hard3/target", "ВВОЗ"),
+    # hard3 — канон после перепрогона 16.07 (EXAMS.md, N6): кольцо не
+    # ввозится k=2-картой; прежний ВВОЗ с честно проваленной картой 3/8
+    # был ложным ввозом, после F3 организм отказывается
+    ("hard3/donor", "hard3/target_probe", "hard3/target", "ОТКАЗ"),
 ]
 
 

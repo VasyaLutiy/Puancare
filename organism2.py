@@ -112,6 +112,18 @@ class Ruleset:
 
     def consolidate(self):
         self._vocab()
+        # Канонические ранги тай-брейков — порядок ПЕРВОГО ПОЯВЛЕНИЯ в
+        # прожитой истории (у изоморфных жизней одинаков), не лексикография
+        # слов мира (F2/N14: при точной ничьей выигрышей выбор кандидата
+        # по алфавиту делал набор правил функцией переименования). Предел
+        # немоты: предикаты-одновременники (впервые видны в ОДНОМ эпизоде)
+        # ранжируются именем — стреляет лишь на точной ничьей кандидатов
+        # с разными предикатами.
+        self._o_rank, self._p_rank = {}, {}
+        for (ctx, a, o) in self.episodes:
+            self._o_rank.setdefault((a, o), len(self._o_rank))
+            for p in sorted(ctx):
+                self._p_rank.setdefault(p, len(self._p_rank))
         self.rules = []
         by_action = defaultdict(lambda: defaultdict(list))
         for (ctx, a, o), m in self.episodes.items():
@@ -177,14 +189,15 @@ class Ruleset:
         for ctx, bad in wrong.items():
             if not bad:
                 continue
-            preds = sorted(ctx)
+            preds = sorted(ctx, key=self._p_rank.get)
             cands.add(())
             cands.update((p,) for p in preds)
             if MAX_CONDS >= 2:
                 cands.update((p, q) for i_, p in enumerate(preds)
                              for q in preds[i_ + 1:])
         best, best_gain = None, 0.0
-        for c in sorted(cands):
+        for c in sorted(cands, key=lambda c: (len(c),
+                                              [self._p_rank[p] for p in c])):
             cs = frozenset(c)
             fired = [ctx for ctx in groups
                      if cs <= ctx
@@ -192,7 +205,7 @@ class Ruleset:
             if not fired:
                 continue
             outs = {o for ctx in fired for (o, _m) in wrong[ctx]}
-            for outcome in sorted(outs):
+            for outcome in sorted(outs, key=lambda o: self._o_rank[(a, o)]):
                 gain = -self._rule_cost(a, cs)
                 for ctx in fired:
                     rest = [(o, m) for o, m in groups[ctx] if o != outcome]
@@ -328,7 +341,9 @@ class Axis:
     def __init__(self, actions, k, res_a):
         self.actions = tuple(sorted(actions))
         self.k = k
-        self.res_a = {a: sorted(rs) for a, rs in res_a.items()}
+        # порядок результатов — как дан (первое появление в трассе, F2);
+        # sorted() здесь возвращал лексикографию слов мира в подпись
+        self.res_a = {a: list(rs) for a, rs in res_a.items()}
         self.emis = {}                       # (s, a) -> {result: вес}
         self.haz = [0.0] * k                 # кубик: шанс уйти из s за тик
         self.tgt = [[0.0] * k for _ in range(k)]   # куда уходит
@@ -579,11 +594,17 @@ def _hazard_mle(ax, s, pairs_ev):
 
 
 def fit_axis(actions, timelines, k, restarts=2, iters=5):
-    """EM: таблица ответов + кубики. timelines: {obj: [(t, a, r), ...]}."""
-    res_a = defaultdict(set)
+    """EM: таблица ответов + кубики. timelines: {obj: [(t, a, r), ...]}.
+
+    res_a — упорядоченное множество: порядок ПЕРВОГО ПОЯВЛЕНИЯ результата
+    в прожитой трассе, не алфавит (арка немоты F2: rng-старт эмиссий по
+    sorted(res_a) делал форму функцией лексикографии слов мира — изоморф
+    с обращённым алфавитом давал другие биты; порядок появления у
+    изоморфных жизней одинаков по построению)."""
+    res_a = defaultdict(dict)
     for tl in timelines.values():
         for (_t, a, r) in tl:
-            res_a[a].add(r)
+            res_a[a].setdefault(r, None)
     n_obs = sum(len(tl) for tl in timelines.values())
     n_pairs = sum(max(0, len(tl) - 1) for tl in timelines.values())
     # со-подписи объектов (последний результат по каждому действию) —
@@ -616,7 +637,7 @@ def fit_axis(actions, timelines, k, restarts=2, iters=5):
                                        for r in res_a[a]}
                 else:
                     ax.emis[(s, a)] = {r: 0.5 + rng.random()
-                                       for r in sorted(res_a[a])}
+                                       for r in res_a[a]}
             ax.haz[s] = 0.05 if k > 1 else 0.0
             ax.tgt[s] = [0.0 if j == s else 1.0 / max(1, k - 1)
                          for j in range(k)]
@@ -709,6 +730,10 @@ class Organism:
     def __init__(self, curious, object_actions, ctx_fn, truth_fn=None,
                  entities_fn=None, seed=0):
         self.curious = curious
+        # ранг объявления действий (порядок анкеты — структурный, переживает
+        # переименование): канонический порядок для _structure вместо
+        # лексикографии слов мира (F2/N14)
+        self._act_rank = {a: i for i, a in enumerate(object_actions)}
         self.object_actions = set(object_actions)
         self.ctx_fn = ctx_fn
         self.truth_fn = truth_fn or (lambda w, t: None)
@@ -889,7 +914,8 @@ class Organism:
         видит и повторы противоречий, и видимые атрибуты через правила.
         Кандидаты: лучшее разбиение по локальному счёту; оно же с
         принудительными осями k>=2; одна общая ось на все симптомы."""
-        acts = sorted(actions)
+        acts = sorted(actions, key=lambda a: (self._act_rank.get(
+            a, len(self._act_rank)), a))    # ранг анкеты, не алфавит (F2)
         memo = {}
 
         def fit(block, min2=False):
