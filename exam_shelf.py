@@ -38,6 +38,22 @@ SHELF_PATH = "shelf/shelf.json"
 LEDGER = "exams_ledger.jsonl"
 
 
+def _core_version():
+    """Короткий хэш ядра, штампуется в строку ведомости: вердикты разных
+    судей (до/после F3) различимы машинно, а не по памяти оператора."""
+    try:
+        import subprocess
+        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True,
+                             cwd=os.path.dirname(os.path.abspath(__file__)))
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+
+CORE = _core_version()
+
+
 def ensure_shelf(path=SHELF_PATH):
     sh = Shelf.open(path)
     if not sh.cards:
@@ -109,6 +125,7 @@ def run_triad(sh, donor_w, probe_w, exam_w, ledger=LEDGER, verbose=True):
                "d1": round(vd["d"], 3), "d_donor": round(vd["d_donor"], 3),
                "radius": round(vd["radius"], 3), "shelf_v": vd["version"],
                "donor_budget": db, "seed": 0, "elapsed_s": elapsed,
+               "core": CORE,
                "truth": None}                               # истину впишет автор
         rows.append(row)
         results.append((vd.decision, score))

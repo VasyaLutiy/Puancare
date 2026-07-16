@@ -4,8 +4,11 @@ worldforge/.env
 .DS_Store
 __pycache__/
 
-# генерируемые артефакты шкафа/станка (регенерируемы; не в коммит)
-shelf/
-exams_ledger.jsonl
-worldforge/in/
+# генерируемые артефакты станка (маршруты выводимы заново; не в коммит)
 worldforge/out/
+
+# Доказательная база ведомости — В КОММИТЕ (N7: хэш-заморозка троек жива,
+# а сами тройки/ведомость/полка были вне версионирования):
+#   exams_ledger*.jsonl, shelf/shelf.json, worldforge/in/
+shelf/*
+!shelf/shelf.json
