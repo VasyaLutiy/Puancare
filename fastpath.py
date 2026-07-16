@@ -56,34 +56,81 @@ def _collect(glue, budget, worlds=10):
     return org
 
 
-def select_k(fits, margin=100.0):
-    """Отбор k с ЗАПАСОМ: расти, пока добавление состояния даёт прирост
-    score > margin. Фиктивное состояние даёт знакопеременную мелочь и не
-    проходит — стабильный k, где argmax-score плавает (см. probe_k)."""
-    ks = sorted(fits)
-    k = ks[0]
-    for kk in ks[1:]:
-        if fits[kk].score - fits[k].score > margin:
-            k = kk
+def _fit_ks(acts, tls, ks):
+    return {k: fit_axis(acts, tls, k) for k in ks}
+
+
+def select_k(acts, tls, ks=(2, 3, 4)):
+    """Отбор k БЕЗ рукодельного порога (арка линзы: margin=100 удалён).
+
+    Болезнь константы (досье конвейера, batch-00..04): настоящие приросты
+    score при верном k+1 — 39..137 бит и РАСТУТ с данными, а порог стоял
+    на месте → один и тот же мир по-разному глубок на 300 и 600 (b04-m04:
+    ввоз@300, ложный ОТКАЗ@600 с d=4.66), волк f0006 (k-флип линзы одной
+    карточки раздул радиус полки до 3.26 и выключил детектор новизны).
+
+    Правило из данных: объекты делятся на две независимые половины; шаг
+    k-1→k принимается, если (а) ОБЕ половины за (прирост > 0 у каждой) и
+    (б) прирост на полных данных больше межполовинного разброса прироста
+    (сигнал > выборочный шум). Фиктивное состояние проваливает (а) —
+    штраф Оккама уже в score даёт ему знакопеременную мелочь; пограничное
+    настоящее состояние принимается, как только данные тянут, и решение
+    перестаёт зависеть от бюджета скачком. Возвращает (k, fits_full)."""
+    keys = sorted(tls, key=repr)
+    ha = {o: tls[o] for i, o in enumerate(keys) if i % 2 == 0}
+    hb = {o: tls[o] for i, o in enumerate(keys) if i % 2 == 1}
+    full = _fit_ks(acts, tls, ks)
+    fa, fb = _fit_ks(acts, ha, ks), _fit_ks(acts, hb, ks)
+    kk = sorted(ks)
+    k = kk[0]
+    for k2 in kk[1:]:
+        if any(f[x] is None for f in (full, fa, fb) for x in (k, k2)):
+            break
+        dA = fa[k2].score - fa[k].score
+        dB = fb[k2].score - fb[k].score
+        dF = full[k2].score - full[k].score
+        if min(dA, dB) > 0 and dF > abs(dA - dB):
+            k = k2
         else:
             break
-    return k
+    return k, full, fa, fb
 
 
-def quick_signature(glue, budget, ks=(2, 3, 4), margin=100.0, acts=None):
-    """Только подпись нового мира (быстро): собрать → подогнать k∈ks →
-    отобрать k с запасом → подпись. Для узнавания/новизны, без навязывания.
+def quick_signature(glue, budget, ks=(2, 3, 4), acts=None):
+    """Подпись нового мира (быстро): МУЛЬТИ-K. Прежняя одиночная подпись
+    прыгала разрывно при пограничном выборе k (волк f0006, ложный отказ
+    b04-m04, раскол семьи лестниц A/B) — любое правило выбора одного k
+    иногда колет семьи. Мульти-подпись несёт срезы при ВСЕХ k∈ks; сравнение
+    (koopman._pair_d) идёт только при совпадающем k — паддинг-взрыв
+    исчезает по построению.
 
-    acts — ЛИНЗА: ограничить подпись поднабором действий. Нужна, когда
-    запрос видел мир у́же библиотеки (цель жила только зондом): подписи
-    сравнимы лишь через ОДНУ линзу, иначе d — артефакт ширины обзора,
-    а не формы (улов held-out v2)."""
+    Поля подписи: верхний уровень = срез при устойчивом k (select_k) —
+    legacy-совместимо; "ks" = все срезы; "noise" = внутримировая болтанка
+    компонент между половинами данных (шумовой пол для calibrate).
+
+    acts — ЛИНЗА: ограничить подпись поднабором действий (улов v2)."""
     org = _collect(glue, budget)
     acts = tuple(sorted(acts if acts is not None else org.object_actions))
     tls = org._axis_timelines(acts)
-    fits = {k: fit_axis(acts, tls, k) for k in ks}
-    k = select_k(fits, margin)
-    return koopman.signature(fits[k]), fits[k]
+    k, fits, fa, fb = select_k(acts, tls, ks)
+    sig = dict(koopman.signature(fits[k]))
+    sig["ks"] = {kk: koopman.signature(fits[kk])
+                 for kk in ks if fits.get(kk) is not None}
+    noise = {}
+    for c in koopman.COMPS:
+        ds = []
+        for kk in ks:
+            trio = [f[kk] for f in (fits, fa, fb) if f.get(kk) is not None]
+            sgs = [koopman.signature(x) for x in trio]
+            # болтанка = МАКС разброс компоненты между фитами полных данных
+            # и половин: артефакты (комплекс-пары EM) гуляют между фитами
+            # разного объёма, настоящий сигнал — нет
+            ds.append(max((koopman._comp_d(a, b, c)
+                           for i, a in enumerate(sgs) for b in sgs[i + 1:]),
+                          default=0.0))
+        noise[c] = sum(ds) / len(ds) if ds else 0.0
+    sig["noise"] = noise
+    return sig, fits[k]
 
 
 def recognize_and_fit(glue, budget, repertoire, ks=(2, 3, 4)):
@@ -92,10 +139,11 @@ def recognize_and_fit(glue, budget, repertoire, ks=(2, 3, 4)):
     org = _collect(glue, budget)
     acts = tuple(sorted(org.object_actions))
     tls = org._axis_timelines(acts)
-    fits = {k: fit_axis(acts, tls, k) for k in ks}
-    prov = fits[select_k(fits)]     # для подписи — тот же margin-отбор,
-    # что в quick_signature (argmax по score плавает, см. probe_k)
-    q = koopman.signature(prov)
+    k_prov, fits, fa, fb = select_k(acts, tls, ks)    # тот же устойчивый
+    prov = fits[k_prov]                               # отбор, что в quick_signature
+    q = dict(koopman.signature(prov))                 # мульти-подпись, как там же
+    q["ks"] = {kk: koopman.signature(fits[kk])
+               for kk in ks if fits.get(kk) is not None}
     scored = sorted((koopman.dist(q, f["sig"]), i, f)
                     for i, f in enumerate(repertoire) if f["sig"])
     dist, _, form = scored[0]
