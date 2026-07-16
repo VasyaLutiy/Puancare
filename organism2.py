@@ -385,6 +385,37 @@ class Axis:
         return [sum(bel[s] * Tdt[s][j] for s in range(self.k))
                 for j in range(self.k)]
 
+    def stationary(self, tol=1e-12, max_iters=10000):
+        """Стационар T степенной итерацией ДО СХОДИМОСТИ (не фикс-бюджетом).
+        Кэш живёт вместе с _tpow: сбрасывается при смене параметров."""
+        pi = self._tpow.get("pi_st")
+        if pi is None:
+            T = self.T()
+            pi = [1.0 / self.k] * self.k
+            for _ in range(max_iters):
+                nxt = _norm([sum(pi[s] * T[s][j] for s in range(self.k))
+                             for j in range(self.k)])
+                if max(abs(a - b) for a, b in zip(nxt, pi)) < tol:
+                    pi = nxt
+                    break
+                pi = nxt
+            self._tpow["pi_st"] = pi
+        return pi
+
+    def devolve(self, bel, dt):
+        """Обратный ход цепи (N4): P(s_{t-dt} | оценка bel в t) — байесов
+        реверс марковской цепи по стационару: P(s_прош=i | s_буд=j) =
+        π_i·T^dt_ij / π_j. Прямая экстраполяция T^dt на прошлое (как было)
+        систематически лгала при несимметричных T."""
+        if dt <= 0:
+            return list(bel)
+        Tdt = self.tpow(dt)
+        pi = self.stationary()
+        out = [pi[i] * sum(Tdt[i][j] * bel[j] / max(pi[j], 1e-300)
+                           for j in range(self.k))
+               for i in range(self.k)]
+        return _norm(out)
+
     def see(self, bel, a, r):
         """Увидел — вычеркни состояния, которые так не ответили бы."""
         return _norm([bel[s] * self.emis_p(s, a, r) for s in range(self.k)])
@@ -995,7 +1026,14 @@ class Organism:
     def _label_at(entry, t):
         ax, line = entry
         (t0, g0) = min(line, key=lambda p: abs(p[0] - t))
-        bel = ax.evolve(g0, abs(t - t0)) if t != t0 else g0
+        if t == t0:
+            bel = g0
+        elif t > t0:
+            bel = ax.evolve(g0, t - t0)
+        else:
+            # прошлое до ближайшего наблюдения — обратным ходом цепи (N4);
+            # прямой T^|dt| назад систематически лгал при несимметричных T
+            bel = ax.devolve(g0, t0 - t)
         m = max(bel)
         return (m, bel.index(m))
 
@@ -1030,16 +1068,26 @@ class Organism:
         return mem.total_bits() + self._axes_bits(axes)
 
     def sleep(self):
-        # 1. переразметка и остаток при текущей структуре
+        # 1. переразметка и остаток при текущей структуре.
+        # Остаток — ПО ТЕМ ЖЕ МЕТКАМ, что и mem (F4): прежняя разметка
+        # residue метками «belief сейчас» (contextualize/_labels_now)
+        # расходилась с эпизодами mem (метки момента записи) → ложный
+        # остаток. Множество СВЕЖЕЕ, но действия живых осей остаются
+        # открытыми вопросами: закрыто только то, что объяснено правилами
+        # БЕЗ тайной оси. Полная очистка по нулевому остатку замуровывала
+        # раннюю ось (comp: k=4 в 66.5 бит объяснял всё → k=3 в 56.6 бит
+        # больше никто не предлагал — судья лучшего кандидата не видел);
+        # вечное накопление (как было) пересуживало давно закрытые
+        # действия каждый сон.
         self.mem = self._relabel(self.axes)
         cur_bits = self._total_bits(self.axes, self.mem)
-        residue = [r for r in self.records
-                   if (lambda p: p is None or p["outcome"] != r["outcome"])(
-                       self.mem.predict(
-                           self.contextualize(r["ctx"], r["obj"], r["ents"]),
-                           r["action"]))]
-        self.problem_actions |= {r["action"] for r in residue
-                                 if r["obj"] is not None}
+        self.problem_actions = {
+            a for (ctx, a, o) in self.mem.episodes
+            if a in self.object_actions
+            and (lambda p: p is None or p["outcome"] != o)(
+                self.mem.predict(ctx, a))} | \
+            {a for ax in self.axes for a in ax.actions
+             if a in self.object_actions}
         # 2. кандидаты-структуры: предложения от локального счёта,
         # приговор — глобальные биты
         if self.problem_actions:
