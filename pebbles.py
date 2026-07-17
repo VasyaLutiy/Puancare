@@ -74,9 +74,10 @@ class Scale:
 
 
 class Pebbles:
-    def __init__(self, seed=0, n_piles=8):
+    def __init__(self, seed=0, n_piles=8, phase=1):
         self.seed = seed
         self.n_piles = n_piles
+        self.phase = phase
         self.reset()
 
     def reset(self):
