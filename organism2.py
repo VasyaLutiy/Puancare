@@ -485,16 +485,19 @@ class Axis:
         return gammas, ll
 
 
-def _cluster_signatures(sigs, first_seen):
+def _cluster_signatures(sigs, first_seen, tie=None):
     """Жадная склейка совместимых подписей {действие: результат} —
     стартовая точка для EM (сшивка состояний между действиями идёт от
     объектов, измеренных несколькими симптомами). Решений не принимает.
-    Tie-break — НЕМОЙ: время первого появления объекта в дневнике
-    (уникально: глобальный счётчик шагов), не имя — иначе переименование
-    мира меняло порядок склейки и стартовую точку EM."""
+    Tie-break объектов-ровесников — параметр tie: любой НЕМОЙ ключ (время
+    первого появления, содержимое подписи в прожитых рангах, ...). Имя
+    объекта запрещено (течь немоты F2). Порядок склейки — лотерея
+    стартовой точки EM, поэтому fit_axis предъявляет ПУЛ порядков."""
+    if tie is None:
+        tie = lambda kv: first_seen[kv[0]]   # немой дефолт: время появления
     clusters = []
     for obj, s in sorted(sigs.items(),
-                         key=lambda kv: (-len(kv[1]), first_seen[kv[0]])):
+                         key=lambda kv: (-len(kv[1]), tie(kv))):
         for msig, objs in clusters:
             shared = set(s) & set(msig)
             if shared and all(s[a] == msig[a] for a in shared):
@@ -659,15 +662,37 @@ def fit_axis(actions, timelines, k, restarts=2, iters=5):
             s[a] = r
         if s:
             sigs[obj] = s
-    clusters = _cluster_signatures(sigs, first_seen)
+    a_rank = {a: i for i, a in enumerate(res_a)}
+    r_rank = {a: {r: i for i, r in enumerate(rs_)} for a, rs_ in res_a.items()}
+    def _sig_rank(s):
+        return tuple(sorted((a_rank[a], r_rank[a].get(r, -1))
+                            for a, r in s.items()))
+    # ПУЛ немых стартов вместо одного канона склейки: порядок объектов-
+    # ровесников — лотерея стартовой точки EM (см. арку F2: канон сменился
+    # и структура @2000 уехала). Как и с k в арке открытия: старты только
+    # ПРЕДЛАГАЮТ, приговор за счётом. Все три порядка немые.
+    cluster_pool = [
+        _cluster_signatures(sigs, first_seen,
+                            lambda kv: first_seen[kv[0]]),          # время
+        _cluster_signatures(sigs, first_seen,
+                            lambda kv: _sig_rank(kv[1])),           # содержимое
+        _cluster_signatures(sigs, first_seen,
+                            lambda kv: -first_seen[kv[0]]),         # анти-время
+    ]
+    seen_cl = []
+    for cl in cluster_pool:                       # дедуп одинаковых склеек
+        if cl not in seen_cl:
+            seen_cl.append(cl)
     best = None
-    for rs in range(restarts):
+    n_starts = len(seen_cl) + max(0, restarts - 1)
+    for rs in range(n_starts):
+        clusters = seen_cl[rs] if rs < len(seen_cl) else []
         rng = random.Random(rs)
         ax = Axis(actions, k, res_a)
         ax.n_obs, ax.n_pairs = n_obs, n_pairs
         for s in range(k):
             for a in res_a:
-                if rs == 0 and s < len(clusters):
+                if clusters and s < len(clusters):
                     # рестарт 0: старт от со-подписей — эмиссии состояния
                     # s из реальных счётчиков s-го по величине кластера
                     # (сильный старт — вес старта равен весу улик)
