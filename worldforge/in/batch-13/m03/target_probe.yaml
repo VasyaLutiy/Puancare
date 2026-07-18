@@ -1,0 +1,28 @@
+мир: lineage_slide
+объекты:
+  зовутся: shard
+  видимое:
+    shade: [vivid, pale]
+  скрытое:
+    level: [alpha, beta, gamma, delta]
+  ловушки:
+    - если level=alpha то shade=vivid (70%)
+  гарантии:
+    - минимум 3 объектов с level=alpha
+    - минимум 2 объектов с level=delta
+  действий: 8
+действия:
+  touch:
+    - если level=alpha то smooth
+    - если level=beta то slick
+    - если level=gamma то coarse
+    - иначе powdery
+динамика:
+  каждый_шаг:
+    - если level=alpha то шанс_стать beta (14%)
+    - если level=beta то шанс_стать gamma (14%)
+    - если level=gamma то шанс_стать delta (14%)
+вмешательство:
+  draw:
+    выбираешь: [shade]
+    фиксировано: level=alpha

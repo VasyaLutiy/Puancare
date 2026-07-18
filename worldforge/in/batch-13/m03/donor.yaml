@@ -1,0 +1,35 @@
+мир: chain_decay
+объекты:
+  зовутся: relic
+  видимое:
+    hue: [bright, dim]
+  скрытое:
+    tier: [prime, faded, worn, spent]
+  ловушки:
+    - если tier=prime то hue=bright (75%)
+  гарантии:
+    - минимум 3 объектов с tier=prime
+    - минимум 2 объектов с tier=spent
+  действий: 8
+действия:
+  touch:
+    - если tier=prime то warm
+    - если tier=faded то cool
+    - если tier=worn то rough
+    - иначе gritty
+  hit:
+    - если tier=prime то rebounded
+    - если tier=faded то cracked
+    - если tier=worn то dissolved
+    - иначе muted
+динамика:
+  каждый_шаг:
+    - если tier=prime то шанс_стать faded (12%)
+    - если tier=faded то шанс_стать worn (12%)
+    - если tier=worn то шанс_стать spent (12%)
+вмешательство:
+  extract:
+    выбираешь: [hue]
+    фиксировано: tier=prime
+экзамены:
+  - зонд touch вопрос hit

@@ -1,0 +1,33 @@
+мир: decaying_ladder
+объекты:
+  зовутся: relic
+  видимое:
+    hue: [pale, murky]
+  скрытое:
+    phase: [pristine, worn, spent]
+  ловушки:
+    - если phase=pristine то hue=pale (75%)
+  гарантии:
+    - минимум 3 объектов с phase=pristine
+    - минимум 3 объектов с phase=worn
+    - минимум 2 объектов с phase=spent
+действия:
+  examine:
+    - если phase=pristine то smooth
+    - если phase=worn то gritty
+    - если phase=spent то powdery
+  apply:
+    - если phase=pristine то stable
+    - если phase=worn то unstable
+    - если phase=spent то broken
+динамика:
+  каждый_шаг:
+    - если phase=pristine то шанс_стать worn (4%)
+    - если phase=worn то шанс_стать spent (4%)
+вмешательство:
+  extract:
+    выбираешь: [hue]
+    фиксировано: phase=pristine
+экзамены:
+  - зонд examine вопрос apply
+объектов: 8

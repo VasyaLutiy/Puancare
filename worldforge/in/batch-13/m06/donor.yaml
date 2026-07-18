@@ -1,0 +1,29 @@
+мир: flicker_realm
+объекты:
+  зовутся: shard
+  видимое:
+    hue: [pale, murky]
+  скрытое:
+    phase: [alpha, beta]
+  ловушки:
+    - если phase=alpha то hue=pale (70%)
+  гарантии:
+    - минимум 3 объектов с phase=alpha
+действия:
+  touch:
+    - если phase=alpha то smooth
+    - иначе rough
+  strike:
+    - если phase=alpha то sparked
+    - иначе dulled
+динамика:
+  каждый_шаг:
+    - если phase=alpha то шанс_стать beta (35%)
+    - если phase=beta то шанс_стать alpha (35%)
+вмешательство:
+  extract:
+    выбираешь: [hue]
+    фиксировано: phase=alpha
+экзамены:
+  - зонд touch вопрос strike
+объектов: 8

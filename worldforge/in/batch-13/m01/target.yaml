@@ -1,0 +1,33 @@
+мир: stepwise_decay
+объекты:
+  зовутся: shard
+  видимое:
+    tint: [light, dark]
+  скрытое:
+    grade: [prime, middle, final]
+  ловушки:
+    - если grade=prime то tint=light (70%)
+  гарантии:
+    - минимум 3 объектов с grade=prime
+    - минимум 3 объектов с grade=middle
+    - минимум 2 объектов с grade=final
+действия:
+  examine:
+    - если grade=prime то silky
+    - если grade=middle то coarse
+    - если grade=final то crumbly
+  apply:
+    - если grade=prime то stable
+    - если grade=middle то unstable
+    - если grade=final то broken
+динамика:
+  каждый_шаг:
+    - если grade=prime то шанс_стать middle (4%)
+    - если grade=middle то шанс_стать final (4%)
+вмешательство:
+  harvest:
+    выбираешь: [tint]
+    фиксировано: grade=prime
+экзамены:
+  - зонд examine вопрос apply
+объектов: 8

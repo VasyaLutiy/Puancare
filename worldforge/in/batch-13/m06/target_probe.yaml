@@ -1,0 +1,24 @@
+мир: switch_domain
+объекты:
+  зовутся: fragment
+  видимое:
+    tint: [light, dark]
+  скрытое:
+    state: [up, down]
+  ловушки:
+    - если state=up то tint=light (65%)
+  гарантии:
+    - минимум 3 объектов с state=up
+действия:
+  touch:
+    - если state=up то plush
+    - иначе prickly
+динамика:
+  каждый_шаг:
+    - если state=up то шанс_стать down (27%)
+    - если state=down то шанс_стать up (27%)
+вмешательство:
+  extract:
+    выбираешь: [tint]
+    фиксировано: state=up
+объектов: 8
