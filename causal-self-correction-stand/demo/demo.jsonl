@@ -1,0 +1,2 @@
+{"after":{"alarm":false,"light":true,"power":true},"event":"accepted_transition","experience_id":1,"outcome":"ok","prediction":{"action_id":"set_power","changed":["power"],"id":"d9bd893abaaad82138669386f03519b888fefc10887b2db4812f65473fd6780b","unchanged":[],"unknown":["alarm","light"]}}
+{"after":{"alarm":true,"light":true,"power":true},"event":"accepted_transition","experience_id":2,"outcome":"ok","prediction":{"action_id":"trigger_alarm","changed":["alarm"],"id":"d145c25b8f6180cef195c9ec0c5d348bd213d61e5a94ba648141f7c61504b090","unchanged":[],"unknown":["light","power"]}}

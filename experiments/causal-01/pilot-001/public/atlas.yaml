@@ -1,0 +1,37 @@
+schema: transition-atlas/v1
+variables:
+  - id: v_n8w4
+    domain: [k_51, k_06]
+    observable: true
+  - id: v_q7m2
+    domain: [k_73, k_28]
+    observable: true
+  - id: v_h3p6
+    domain: [k_44, k_97]
+    observable: true
+  - id: v_c9r5
+    domain: [k_19, k_62]
+    observable: true
+  - id: v_z1k8
+    domain: [k_85, k_30]
+    observable: true
+actions:
+  - id: x_t9b3
+    intervention:
+      variable: v_h3p6
+      operation: toggle
+  - id: x_m4s7
+    intervention:
+      variable: v_q7m2
+      operation: toggle
+hypotheses:
+  - id: h_6d2f
+    cause: v_q7m2
+    effect: v_c9r5
+    relation: cochanges
+    provenance: atlas
+policy:
+  support_min: 2
+  refute_min: 2
+  candidate_generation: all_observable_effects
+  proposed_prediction: changed

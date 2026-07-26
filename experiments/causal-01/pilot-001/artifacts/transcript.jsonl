@@ -1,0 +1,52 @@
+{"event":"parent_sandbox_probe","filesystem_isolated":true,"network_isolated":false,"phase":"training","pid_isolated":true,"proof":"parent direct, proc-self-root, namespace-pid-root, and examiner-import denials","sequence":1}
+{"event":"learner_start","filesystem_isolated":true,"network_isolated":false,"phase":"training","pid":123251,"pid_isolated":true,"sandbox":"bwrap-filesystem-pid","sequence":2}
+{"event":"learner_namespace_pid","host_pid":123251,"namespace_pid":2,"phase":"training","sequence":3}
+{"event":"load","phase":"training","sequence":4,"source":"empty_shelf"}
+{"event":"sandbox_confirmed","filesystem_isolated":true,"network_isolated":false,"phase":"training","pid_isolated":true,"proof":"parent-controlled filesystem and PID probe completed before learner startup","sequence":5}
+{"event":"bind","phase":"training","reply":{"ok":true},"sequence":6}
+{"event":"predict","phase":"training","reply":{"ok":true,"prediction":{"action_id":"x_m4s7","changed":["v_c9r5","v_q7m2"],"id":"7e1a519e4475a703587f14e5d0dd03f9330e2d5e0fdea1dd1fee534aecfb8530","unchanged":[],"unknown":["v_h3p6","v_n8w4","v_z1k8"]}},"sequence":7}
+{"action_id":"x_m4s7","event":"prediction_recorded","phase":"training","prediction":{"action_id":"x_m4s7","changed":["v_c9r5","v_q7m2"],"id":"7e1a519e4475a703587f14e5d0dd03f9330e2d5e0fdea1dd1fee534aecfb8530","unchanged":[],"unknown":["v_h3p6","v_n8w4","v_z1k8"]},"sequence":8}
+{"action_id":"x_m4s7","event":"step","phase":"training","response":{"action_id":"x_m4s7","obs_after":{"v_c9r5":"k_19","v_h3p6":"k_44","v_n8w4":"k_51","v_q7m2":"k_28","v_z1k8":"k_30"},"outcome":"ok"},"sequence":9}
+{"action_id":"x_m4s7","actual_changed":["v_q7m2","v_z1k8"],"event":"score","phase":"training","sequence":10}
+{"event":"accept","phase":"training","reply":{"experience_id":1,"ok":true},"sequence":11}
+{"event":"predict","phase":"training","reply":{"ok":true,"prediction":{"action_id":"x_m4s7","changed":["v_c9r5","v_h3p6","v_n8w4","v_q7m2","v_z1k8"],"id":"61a26d622446fa6deaa62237d54f6c7a954b3e048cfd5c8610fa08da2b8fd3e1","unchanged":[],"unknown":[]}},"sequence":12}
+{"action_id":"x_m4s7","event":"prediction_recorded","phase":"training","prediction":{"action_id":"x_m4s7","changed":["v_c9r5","v_h3p6","v_n8w4","v_q7m2","v_z1k8"],"id":"61a26d622446fa6deaa62237d54f6c7a954b3e048cfd5c8610fa08da2b8fd3e1","unchanged":[],"unknown":[]},"sequence":13}
+{"action_id":"x_m4s7","event":"step","phase":"training","response":{"action_id":"x_m4s7","obs_after":{"v_c9r5":"k_19","v_h3p6":"k_44","v_n8w4":"k_51","v_q7m2":"k_73","v_z1k8":"k_85"},"outcome":"ok"},"sequence":14}
+{"action_id":"x_m4s7","actual_changed":["v_q7m2","v_z1k8"],"event":"score","phase":"training","sequence":15}
+{"event":"accept","phase":"training","reply":{"experience_id":2,"ok":true},"sequence":16}
+{"event":"predict","phase":"training","reply":{"ok":true,"prediction":{"action_id":"x_t9b3","changed":["v_h3p6"],"id":"aec857f1c6501c8878585f802729e28f9b9c8a316b5649f3d1ff85c532f914f0","unchanged":[],"unknown":["v_c9r5","v_n8w4","v_q7m2","v_z1k8"]}},"sequence":17}
+{"action_id":"x_t9b3","event":"prediction_recorded","phase":"training","prediction":{"action_id":"x_t9b3","changed":["v_h3p6"],"id":"aec857f1c6501c8878585f802729e28f9b9c8a316b5649f3d1ff85c532f914f0","unchanged":[],"unknown":["v_c9r5","v_n8w4","v_q7m2","v_z1k8"]},"sequence":18}
+{"action_id":"x_t9b3","event":"step","phase":"training","response":{"action_id":"x_t9b3","obs_after":{"v_c9r5":"k_19","v_h3p6":"k_97","v_n8w4":"k_51","v_q7m2":"k_73","v_z1k8":"k_85"},"outcome":"ok"},"sequence":19}
+{"action_id":"x_t9b3","actual_changed":["v_h3p6"],"event":"score","phase":"training","sequence":20}
+{"event":"accept","phase":"training","reply":{"experience_id":3,"ok":true},"sequence":21}
+{"event":"predict","phase":"training","reply":{"ok":true,"prediction":{"action_id":"x_t9b3","changed":["v_c9r5","v_h3p6","v_n8w4","v_q7m2","v_z1k8"],"id":"08da60e8e2495b36f1a06c58b710e31d642a637a94afa0d09cd775e14cd912c8","unchanged":[],"unknown":[]}},"sequence":22}
+{"action_id":"x_t9b3","event":"prediction_recorded","phase":"training","prediction":{"action_id":"x_t9b3","changed":["v_c9r5","v_h3p6","v_n8w4","v_q7m2","v_z1k8"],"id":"08da60e8e2495b36f1a06c58b710e31d642a637a94afa0d09cd775e14cd912c8","unchanged":[],"unknown":[]},"sequence":23}
+{"action_id":"x_t9b3","event":"step","phase":"training","response":{"action_id":"x_t9b3","obs_after":{"v_c9r5":"k_19","v_h3p6":"k_44","v_n8w4":"k_51","v_q7m2":"k_73","v_z1k8":"k_85"},"outcome":"ok"},"sequence":24}
+{"action_id":"x_t9b3","actual_changed":["v_h3p6"],"event":"score","phase":"training","sequence":25}
+{"event":"accept","phase":"training","reply":{"experience_id":4,"ok":true},"sequence":26}
+{"event":"save","phase":"training","reply":{"atlas_id":"4c06b885d991e91eccbc5d74fbac5428b66d45c9a2dc72af2e273319f54e034d","ok":true,"version":4},"sequence":27}
+{"chain":"febbd7cdd57052f7896fd2efd395429bc017b15cce046fa6c980e66277ac9f22","event":"commitments","phase":"training","sequence":28,"state":"21dc93cbc06f15270caed3c4f48896f3c01e4b2ca7e66aacfcf8d27a9c5f48d1"}
+{"event":"learner_exit","phase":"training","pid":123251,"sequence":29,"status":0}
+{"event":"parent_sandbox_probe","filesystem_isolated":true,"network_isolated":false,"phase":"restart","pid_isolated":true,"proof":"parent direct, proc-self-root, namespace-pid-root, and examiner-import denials","sequence":30}
+{"event":"learner_start","filesystem_isolated":true,"network_isolated":false,"phase":"restart","pid":123257,"pid_isolated":true,"sandbox":"bwrap-filesystem-pid","sequence":31}
+{"event":"learner_namespace_pid","host_pid":123257,"namespace_pid":2,"phase":"restart","sequence":32}
+{"event":"load","phase":"restart","sequence":33,"source":"snapshot_bytes"}
+{"event":"sandbox_confirmed","filesystem_isolated":true,"network_isolated":false,"phase":"restart","pid_isolated":true,"proof":"parent-controlled filesystem and PID probe completed before learner startup","sequence":34}
+{"event":"predict","phase":"restart","reply":{"code":"OBSERVATION_UNBOUND","ok":false},"sequence":35}
+{"event":"parent_sandbox_probe","filesystem_isolated":true,"network_isolated":false,"phase":"detached","pid_isolated":true,"proof":"parent direct, proc-self-root, namespace-pid-root, and examiner-import denials","sequence":36}
+{"event":"learner_start","filesystem_isolated":true,"network_isolated":false,"phase":"detached","pid":123263,"pid_isolated":true,"sandbox":"bwrap-filesystem-pid","sequence":37}
+{"event":"learner_namespace_pid","host_pid":123263,"namespace_pid":2,"phase":"detached","sequence":38}
+{"event":"load","phase":"detached","sequence":39,"source":"snapshot_bytes"}
+{"event":"sandbox_confirmed","filesystem_isolated":true,"network_isolated":false,"phase":"detached","pid_isolated":true,"proof":"parent-controlled filesystem and PID probe completed before learner startup","sequence":40}
+{"event":"save","phase":"detached","reply":{"atlas_id":"4c06b885d991e91eccbc5d74fbac5428b66d45c9a2dc72af2e273319f54e034d","ok":true,"version":4},"sequence":41}
+{"chain":"febbd7cdd57052f7896fd2efd395429bc017b15cce046fa6c980e66277ac9f22","event":"commitments","phase":"detached","sequence":42,"state":"21dc93cbc06f15270caed3c4f48896f3c01e4b2ca7e66aacfcf8d27a9c5f48d1"}
+{"event":"learner_exit","phase":"detached","pid":123263,"sequence":43,"status":0}
+{"event":"bind","phase":"restart","reply":{"ok":true},"sequence":44}
+{"event":"predict","phase":"restart","reply":{"ok":true,"prediction":{"action_id":"x_m4s7","changed":["v_q7m2","v_z1k8"],"id":"fdd9d3634c861b57e91b359852f73ff622bec85e6f7800c1e1ccd40656d31454","unchanged":["v_c9r5","v_h3p6","v_n8w4"],"unknown":[]}},"sequence":45}
+{"action_id":"x_m4s7","event":"prediction_recorded","phase":"held_out","prediction":{"action_id":"x_m4s7","changed":["v_q7m2","v_z1k8"],"id":"fdd9d3634c861b57e91b359852f73ff622bec85e6f7800c1e1ccd40656d31454","unchanged":["v_c9r5","v_h3p6","v_n8w4"],"unknown":[]},"sequence":46}
+{"action_id":"x_m4s7","event":"step","phase":"held_out","response":{"action_id":"x_m4s7","obs_after":{"v_c9r5":"k_62","v_h3p6":"k_97","v_n8w4":"k_51","v_q7m2":"k_73","v_z1k8":"k_30"},"outcome":"ok"},"sequence":47}
+{"actual_changed":["v_q7m2","v_z1k8"],"event":"score","phase":"held_out","sequence":48}
+{"event":"accept","phase":"restart","reply":{"experience_id":5,"ok":true},"sequence":49}
+{"event":"save","phase":"restart","reply":{"atlas_id":"4c06b885d991e91eccbc5d74fbac5428b66d45c9a2dc72af2e273319f54e034d","ok":true,"version":5},"sequence":50}
+{"chain":"a892a26a17e0f7144b95a91f60cc08cd61ae9e5fcf6b2c1c65929a0a72f604cb","event":"commitments","phase":"restart","sequence":51,"state":"7e34b1d8df778c177d4f171c83aee30eef9ee5bcfc4d9cedb223ff5adad00a13"}
+{"event":"learner_exit","phase":"restart","pid":123257,"sequence":52,"status":0}

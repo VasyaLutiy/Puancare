@@ -1,0 +1,25 @@
+schema: transition-atlas/v1
+variables:
+  - id: power
+    domain: [false, true]
+    observable: true
+  - id: light
+    domain: [false, true]
+    observable: true
+  - id: alarm
+    domain: [false, true]
+    observable: true
+actions:
+  - id: set_power
+    intervention:
+      variable: power
+      operation: set
+  - id: trigger_alarm
+    intervention:
+      variable: alarm
+      operation: trigger
+hypotheses: []
+policy:
+  support_min: 1
+  refute_min: 1
+  candidate_generation: all_observable_effects
