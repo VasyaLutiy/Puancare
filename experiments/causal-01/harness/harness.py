@@ -152,15 +152,15 @@ def assert_parent_probe_result(completed: subprocess.CompletedProcess[str]) -> N
     check(completed.returncode == 0 and completed.stdout == PARENT_PROBE_SUCCESS and completed.stderr == "", "parent-controlled sandbox probe")
 
 
-def create_private_examiner_module(directory: Path) -> Path:
+def create_private_examiner_module(directory: Path, marker: str = "parent-only") -> Path:
     """Create and positively load a private module before proving sandbox denial."""
     module = directory / f"{PRIVATE_EXAMINER_MODULE}.py"
-    atomic_write(module, b"EXAMINER_PRIVATE_MARKER = 'parent-only'\n")
+    atomic_write(module, f"EXAMINER_PRIVATE_MARKER = {marker!r}\n".encode())
     sys.path.insert(0, str(directory))
     try:
         sys.modules.pop(PRIVATE_EXAMINER_MODULE, None)
         loaded = importlib.import_module(PRIVATE_EXAMINER_MODULE)
-        check(getattr(loaded, "EXAMINER_PRIVATE_MARKER", None) == "parent-only", "private examiner module import")
+        check(getattr(loaded, "EXAMINER_PRIVATE_MARKER", None) == marker, "private examiner module import")
     finally:
         sys.path.remove(str(directory))
         sys.modules.pop(PRIVATE_EXAMINER_MODULE, None)

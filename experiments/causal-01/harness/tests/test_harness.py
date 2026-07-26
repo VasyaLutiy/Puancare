@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 from unittest.mock import patch
 from pathlib import Path
 
@@ -24,6 +26,7 @@ from harness import (  # noqa: E402
     HarnessError,
     assert_e1_prediction,
     assert_parent_probe_result,
+    create,
     create_private_examiner_module,
     secure_regular_read,
     sandbox_command,
@@ -34,8 +37,58 @@ class HarnessTest(unittest.TestCase):
     def copied_pilot(self) -> tuple[tempfile.TemporaryDirectory[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         destination = Path(temporary.name) / "pilot-001"
-        shutil.copytree(SOURCE_PILOT, destination)
+        shutil.copytree(SOURCE_PILOT / "public", destination / "public")
+        self.write_synthetic_oracle(destination)
         return temporary, destination
+
+    def write_synthetic_oracle(self, pilot: Path) -> Path:
+        """Build a unique private fixture from the public atlas, never from pilot data."""
+        atlas_file = pilot / "public" / "atlas.yaml"
+        atlas_bytes = atlas_file.read_bytes()
+        atlas = yaml.safe_load(atlas_bytes)
+        self.assertIsInstance(atlas, dict)
+        variables = atlas["variables"]
+        actions = atlas["actions"]
+        prior = atlas["hypotheses"][0]
+        domains = {variable["id"]: variable["domain"] for variable in variables}
+        cause = prior["cause"]
+        false_effect = prior["effect"]
+        cause_action = next(action["id"] for action in actions if action["intervention"]["variable"] == cause)
+        control_action = next(action["id"] for action in actions if action["id"] != cause_action)
+        control = next(action["intervention"]["variable"] for action in actions if action["id"] == control_action)
+        true_effect = next(variable for variable in domains if variable not in {cause, false_effect, control})
+        nonce = uuid.uuid4().hex
+        initial = {variable: domain[0] for variable, domain in domains.items()}
+        oracle = {
+            "synthetic_test_nonce": nonce,
+            "public_atlas": {
+                "file_sha256": hashlib.sha256(atlas_bytes).hexdigest(),
+                "engine_atlas_id": create(atlas_bytes).snapshot().as_mapping()["atlas_id"],
+            },
+            "action_rules": {
+                cause_action: {"operation": "toggle", "changed_variables": [cause, true_effect], "outcome": f"synthetic-{nonce}"},
+                control_action: {"operation": "toggle", "changed_variables": [control], "outcome": f"synthetic-{nonce}"},
+            },
+            "training_schedule": [cause_action, control_action, cause_action, control_action],
+            "initial_observation": initial,
+            "limits": {"max_steps": 5},
+            "restart": {"after_training_step": 4},
+            "held_out": {"initial_observation": {variable: domain[1] for variable, domain in domains.items()}, "action_id": cause_action},
+            "expected_after_training": {
+                "supported_edges": [[cause, true_effect, "cochanges"]],
+                "refuted_edges": [[cause, false_effect, "cochanges"]],
+            },
+            "expected_held_out_prediction": {
+                "changed": [cause, true_effect],
+                "unchanged": sorted(set(domains) - {cause, true_effect}),
+                "unknown": [],
+            },
+        }
+        oracle_file = pilot / "examiner-private" / "oracle.yaml"
+        oracle_file.parent.mkdir()
+        oracle_file.write_text(yaml.safe_dump(oracle, sort_keys=False))
+        self.assertIn(nonce, oracle_file.read_text())
+        return oracle_file
 
     def run_harness(self, pilot: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(["python3", str(HARNESS), "--pilot-root", str(pilot)], text=True, capture_output=True,
@@ -74,7 +127,9 @@ class HarnessTest(unittest.TestCase):
         temporary, pilot = self.copied_pilot()
         with temporary:
             oracle = pilot / "examiner-private" / "oracle.yaml"
-            oracle.write_text(oracle.read_text().replace("file_sha256: 793a7bbcac61ecbbb7cff79a037a1bfb42c5036e3580150c94bac7ed5764a951", "file_sha256: " + "0" * 64))
+            data = yaml.safe_load(oracle.read_text())
+            data["public_atlas"]["file_sha256"] = "0" * 64
+            oracle.write_text(yaml.safe_dump(data, sort_keys=False))
             completed = self.run_harness(pilot)
             self.assertEqual(completed.returncode, 1)
             result = json.loads((pilot / "artifacts" / "result.json").read_text())
@@ -92,18 +147,21 @@ class HarnessTest(unittest.TestCase):
             assert_parent_probe_result(subprocess.CompletedProcess([], 1, PARENT_PROBE_SUCCESS, ""))
         assert_parent_probe_result(subprocess.CompletedProcess([], 0, PARENT_PROBE_SUCCESS, ""))
 
-    def test_parent_bwrap_probe_denies_real_oracle_canary_and_private_module(self) -> None:
+    def test_parent_bwrap_probe_denies_synthetic_oracle_canary_and_private_module(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runtime, work = root / "runtime", root / "work"
             runtime.mkdir(); work.mkdir()
-            oracle, canary = root / "oracle.yaml", root / "canary.secret"
-            oracle.write_bytes(b"private-oracle")
-            canary.write_bytes(b"private-canary")
-            module = create_private_examiner_module(root / "examiner-private")
-            self.assertEqual(oracle.read_bytes(), b"private-oracle")
-            self.assertEqual(canary.read_bytes(), b"private-canary")
-            self.assertEqual(module.read_bytes(), b"EXAMINER_PRIVATE_MARKER = 'parent-only'\n")
+            private = root / "examiner-visible"
+            private.mkdir()
+            nonce = uuid.uuid4().hex
+            oracle, canary = private / "oracle.yaml", private / "canary.secret"
+            oracle.write_bytes(f"synthetic-oracle-{nonce}".encode())
+            canary.write_bytes(f"synthetic-canary-{nonce}".encode())
+            module = create_private_examiner_module(private, marker=f"synthetic-module-{nonce}")
+            self.assertEqual(oracle.read_bytes(), f"synthetic-oracle-{nonce}".encode())
+            self.assertEqual(canary.read_bytes(), f"synthetic-canary-{nonce}".encode())
+            self.assertIn(nonce, module.read_text())
             python = Path(sys.executable).resolve()
             targets = [
                 str(oracle), str(canary),
@@ -117,9 +175,14 @@ class HarnessTest(unittest.TestCase):
     def test_parent_probe_failure_forbids_learner_start(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            oracle, canary = root / "oracle.yaml", root / "canary.secret"
-            oracle.write_bytes(b"private-oracle")
-            canary.write_bytes(b"private-canary")
+            private = root / "examiner-visible"
+            private.mkdir()
+            nonce = uuid.uuid4().hex
+            oracle, canary = private / "oracle.yaml", private / "canary.secret"
+            oracle.write_bytes(f"synthetic-oracle-{nonce}".encode())
+            canary.write_bytes(f"synthetic-canary-{nonce}".encode())
+            module = create_private_examiner_module(private, marker=f"synthetic-module-{nonce}")
+            self.assertIn(nonce, module.read_text())
             atlas = (SOURCE_PILOT / "public" / "atlas.yaml").read_bytes()
             events: list[dict[str, object]] = []
             failed_probe = subprocess.CompletedProcess([], 3, "", "read unexpectedly succeeded")
